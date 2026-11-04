@@ -29,6 +29,10 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![connect_manager, report])
         .setup(|app| {
+            // A desktop companion, not an app to switch to: no Dock icon.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let window = app.get_webview_window("main").expect("the main window is in tauri.conf.json");
             if let Some(monitor) = window.primary_monitor()? {
                 let area = monitor.work_area();

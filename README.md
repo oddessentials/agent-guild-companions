@@ -26,6 +26,16 @@ npm run build    # src-tauri/target/release/agent-guild-companions.exe
 
 `AGENT_GUILD_HOME` points it at another manager's data folder. Test against a scratch manager with its own `AGENT_GUILD_HOME` and `AGENT_GUILD_PORT`, never the one that may be hosting your work.
 
+## Releases
+
+For Windows and macOS. A pull request's title becomes its commit on `main` and decides the next version, in [Conventional Commits](https://www.conventionalcommits.org/): `fix` a patch, `feat` a minor version, others none.
+
+Merging to `main` runs `.github/workflows/release.yml`, which tests, builds, signs and notarizes both installers, holds them in a draft release, checks what the draft holds, and only then tags it and makes it public. If any step fails, nothing is published, and re-running the failed jobs picks up where it stopped.
+
+To stop releases, set the repository variable `RELEASES_ENABLED` to anything but `true`. Merges then still report the version they would release. The next merge after it is set back releases everything since the last release.
+
+Pull requests build unsigned installers as artifacts, for trying a change.
+
 ## License
 
 GNU AGPL 3.0, as Agent Guild. Three.js keeps its MIT notice in `web/vendor/LICENSE.three`.

@@ -8,6 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
@@ -29,7 +30,16 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": ["nsis", "dmg"],
+    "publisher": "Odd Essentials",
+    "category": "Utility",
+    "shortDescription": "A Grove spirit on your desktop, reacting to your Agent Guild sessions.",
+    "license": "AGPL-3.0-only",
+    "licenseFile": "../LICENSE",
+    "windows": {
+      "nsis": { "installMode": "currentUser" }
+    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }
