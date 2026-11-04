@@ -12,7 +12,7 @@ export async function generateNotes(pluginConfig, { env, lastRelease, nextReleas
   const install = [
     '### Install',
     '',
-    'Download **Grove-Companion-windows-setup.exe** for Windows or **Grove-Companion-macos.dmg** for macOS. It needs [Agent Guild](https://github.com/oddessentials/agent-guild) running, and nothing else.',
+    'Download **Grove-Companion-windows-setup.exe** for Windows. It needs [Agent Guild](https://github.com/oddessentials/agent-guild) running, and nothing else.',
   ].join('\n');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'version'), nextRelease.version);
