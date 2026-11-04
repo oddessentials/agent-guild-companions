@@ -30,11 +30,15 @@ npm run build    # src-tauri/target/release/agent-guild-companions.exe
 
 For Windows and macOS. A pull request's title becomes its commit on `main` and decides the next version, in [Conventional Commits](https://www.conventionalcommits.org/): `fix` a patch, `feat` a minor version, others none.
 
-Merging to `main` runs `.github/workflows/release.yml`, which tests, builds, signs and notarizes both installers, holds them in a draft release, checks what the draft holds, and only then tags it and makes it public. If any step fails, nothing is published, and re-running the failed jobs picks up where it stopped.
+Merging to `main` runs `.github/workflows/release.yml`, which tests, builds, signs and notarizes both installers, starts the app, holds the installers in a draft release, checks what the draft holds, and only then tags it and makes it public.
 
-To stop releases, set the repository variable `RELEASES_ENABLED` to anything but `true`. Merges then still report the version they would release. The next merge after it is set back releases everything since the last release.
+| When | What to do |
+| --- | --- |
+| A release run failed | Nothing went public unless the run says otherwise. Re-run its failed jobs, or fix the cause and merge: the next merge releases everything since the last release. |
+| You want to stop releases | Set the repository variable `RELEASES_ENABLED` to anything but `true`. Merges still report the version they would release. |
+| You want to test signing | Run the Release workflow by hand on `main`. It does everything but publish, and keeps the signed installers as artifacts. |
 
-Pull requests build unsigned installers as artifacts, for trying a change.
+Pull requests build unsigned installers, and start the app on real Windows and macOS runners. Their artifacts hold the installers and a screenshot.
 
 ## License
 

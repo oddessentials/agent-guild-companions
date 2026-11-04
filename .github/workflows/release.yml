@@ -1,13 +1,22 @@
 # A feat or fix merged to main becomes a GitHub release, once RELEASES_ENABLED is true.
 #
-# Nothing is public until both installers are built, tested, signed and checked: they wait in a draft
-# release, and only the last job tags it and makes it public. No step falls back to an unsigned build,
-# and builds use no caches, so a pull request's run cannot feed anything into a release.
+# Safe: nothing is public until both installers are built, tested, started, signed and checked. They wait
+# in a draft release, and only the last job tags it and makes it public. No step falls back to an unsigned
+# build, and builds use no caches, so a pull request's run cannot feed anything into a release.
+#
+# Deterministic: the version comes from the commits since the last tag, and the runners, toolchains and
+# dependencies are all pinned.
+#
+# Idempotent: every job can run again. A failed run can be re-run from its failed jobs, and a later merge
+# takes over a draft an earlier run left behind.
+#
+# Running this workflow by hand rehearses a release: the same signed builds and checks, publishing nothing.
 name: Release
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,10 +28,11 @@ concurrency:
 jobs:
   plan:
     name: Plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,7 +40,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --ignore-scripts
         working-directory: .github/release
       - id: plan
@@ -38,35 +48,46 @@ jobs:
           RELEASE_PLAN_DIR: ${{ runner.temp }}/release-plan
           RELEASES_ENABLED: ${{ vars.RELEASES_ENABLED }}
         run: |
-          git clone --quiet --bare . "$RUNNER_TEMP/origin.git"
-          node .github/release/node_modules/semantic-release/bin/semantic-release.js --dry-run --repository-url "file://$RUNNER_TEMP/origin.git"
-          if [ ! -f "$RELEASE_PLAN_DIR/version" ]; then
-            echo "Nothing to release: no feat or fix since the last one."
-            exit 0
-          fi
-          version=$(cat "$RELEASE_PLAN_DIR/version")
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::The planned version \"$version\" is not a plain release version."
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Releases and rehearsals run from main only, not $GITHUB_REF."
             exit 1
           fi
-          if [ "$RELEASES_ENABLED" != true ]; then
-            echo "::notice::Would release $version, but the repository variable RELEASES_ENABLED is not true. The next merge after it is set releases everything since the last release."
-            exit 0
+          git clone --quiet --bare . "$RUNNER_TEMP/origin.git"
+          node .github/release/node_modules/semantic-release/bin/semantic-release.js --dry-run --repository-url "file://$RUNNER_TEMP/origin.git"
+          version=
+          if [ -f "$RELEASE_PLAN_DIR/version" ]; then
+            version=$(cat "$RELEASE_PLAN_DIR/version")
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::The planned version \"$version\" is not a plain release version."
+              exit 1
+            fi
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - if: steps.plan.outputs.version != ''
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "::notice::Rehearsal of ${version:-a build with no new version}: nothing will be published."
+            echo "version=${version:-0.0.0}" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$version" ]; then
+            echo "Nothing to release: no feat or fix since the last release."
+          elif [ "$RELEASES_ENABLED" != true ]; then
+            echo "::notice::Would release $version, but the repository variable RELEASES_ENABLED is not true. The next merge after it is set releases everything since the last release."
+          else
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.plan.outputs.publish == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-plan
           path: ${{ runner.temp }}/release-plan/notes.md
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
   windows:
     name: Windows installer
     needs: plan
     if: needs.plan.outputs.version != ''
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     timeout-minutes: 45
     environment: release-signing
     permissions:
@@ -78,7 +99,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --ignore-scripts
       - run: npm test
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
@@ -105,15 +126,18 @@ jobs:
                 '-Files', '%1')
             } } }
           } | ConvertTo-Json -Depth 6 | Set-Content -Path $config -Encoding utf8
-          npx tauri build --bundles nsis --config $config
+          npx tauri build --bundles nsis --config $config -- --locked
           if ($LASTEXITCODE -ne 0) { throw "The build failed with exit code $LASTEXITCODE." }
+      - name: Start the signed app
+        shell: bash
+        run: node scripts/smoke.mjs src-tauri/target/release/agent-guild-companions.exe "$RUNNER_TEMP/screen-windows.png"
       - name: Check the signature and collect the installer
         shell: pwsh
         env:
           VERSION: ${{ needs.plan.outputs.version }}
           PUBLISHER: ${{ vars.WINDOWS_PUBLISHER }}
         run: |
-          if (-not $env:PUBLISHER) { throw 'The release-signing environment has no WINDOWS_PUBLISHER variable.' }
+          if (-not $env:PUBLISHER) { throw 'The repository has no WINDOWS_PUBLISHER variable.' }
           $built = @(Get-ChildItem 'src-tauri/target/release/bundle/nsis/*.exe')
           if ($built.Count -ne 1 -or $built[0].Name -notlike "*_$($env:VERSION)_*") { throw "Expected one installer for $env:VERSION, found: $($built.Name -join ', ')." }
           $signed = @($built[0].FullName, (Resolve-Path 'src-tauri/target/release/agent-guild-companions.exe').Path)
@@ -130,13 +154,14 @@ jobs:
           name: installer-windows
           path: ${{ runner.temp }}/installer/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
   macos:
     name: macOS disk image
     needs: plan
     if: needs.plan.outputs.version != ''
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 240
     environment: release-signing
     permissions:
@@ -147,7 +172,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version-file: .node-version
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -171,7 +196,9 @@ jobs:
           (umask 077 && printf '%s\n' "$APPLE_NOTARY_KEY_P8" > "$APPLE_API_KEY_PATH")
           trap 'rm -f "$APPLE_API_KEY_PATH"' EXIT
           printf '{"version":"%s"}' "$VERSION" > "$RUNNER_TEMP/release.conf.json"
-          npx tauri build --target universal-apple-darwin --bundles dmg --config "$RUNNER_TEMP/release.conf.json"
+          npx tauri build --target universal-apple-darwin --bundles dmg --config "$RUNNER_TEMP/release.conf.json" -- --locked
+      - name: Start the signed app
+        run: node scripts/smoke.mjs "src-tauri/target/universal-apple-darwin/release/bundle/macos/Grove Companion.app/Contents/MacOS/agent-guild-companions" "$RUNNER_TEMP/screen-macos.png"
       - name: Check the signature and notarization, and collect the disk image
         env:
           VERSION: ${{ needs.plan.outputs.version }}
@@ -188,19 +215,21 @@ jobs:
             echo "::error::Expected one disk image for $VERSION, found ${#built[@]}."
             exit 1
           fi
-          mkdir "$RUNNER_TEMP/installer"
+          mkdir -p "$RUNNER_TEMP/installer"
           cp "${built[0]}" "$RUNNER_TEMP/installer/Grove-Companion-macos.dmg"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-macos
           path: ${{ runner.temp }}/installer/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
   draft:
     name: Draft release
     needs: [plan, windows, macos]
-    runs-on: ubuntu-latest
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       attestations: write
@@ -231,9 +260,15 @@ jobs:
           sha256sum -- "${installers[@]}" > SHA256SUMS
           state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
           if [ "$state" = false ]; then
-            echo "::error::Release $tag is already public, and a public release is not replaced."
+            tagged=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq .object.sha)
+            if [ "$tagged" = "$GITHUB_SHA" ]; then
+              echo "Release $tag of this commit is already public."
+              exit 0
+            fi
+            echo "::error::Release $tag is public at $tagged, and a public release is never replaced."
             exit 1
           elif [ "$state" = true ]; then
+            # An earlier run stopped here, or a newer merge has taken over its version.
             gh release upload "$tag" --clobber "${installers[@]}" SHA256SUMS
             gh release edit "$tag" --target "$GITHUB_SHA" --title "$tag" --notes-file notes.md
           else
@@ -241,7 +276,7 @@ jobs:
           fi
           # Check what the release holds, not what was sent.
           mkdir held
-          for file in "${installers[@]}"; do
+          for file in "${installers[@]}" SHA256SUMS; do
             gh release download "$tag" --pattern "$file" --dir held
             cmp "$file" "held/$file"
           done
@@ -249,7 +284,8 @@ jobs:
   release:
     name: Tag and publish
     needs: [plan, draft]
-    runs-on: ubuntu-latest
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -269,3 +305,24 @@ jobs:
             gh api "repos/$GH_REPO/git/refs" --silent -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA"
           fi
           gh release edit "$tag" --verify-tag --draft=false --latest
+
+  report:
+    name: Say what happened
+    needs: [plan, windows, macos, draft, release]
+    if: failure()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          {
+            echo "## The release did not finish"
+            echo
+            if [ "$RELEASE_RESULT" = failure ]; then
+              echo "The installers are ready, but the last step failed, so the release may still be a draft. **Re-run the failed jobs** to finish it."
+            else
+              echo "Nothing was published. **Re-run the failed jobs** if the cause was passing, or fix it and merge: the next merge releases everything since the last release."
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
