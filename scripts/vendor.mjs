@@ -17,6 +17,8 @@ for (const [from, to] of [['loaders/GLTFLoader.js', 'GLTFLoader.js'], ['utils/Bu
     .replaceAll(/from ['"]\.\.\/utils\/(\w+\.js)['"]/g, "from './$1'");
   writeFileSync(`web/vendor/${to}`, source);
 }
+// The tray shows Agent Guild's shield.
+cpSync(path.resolve(guild, '../../brand/favicon.png'), 'src-tauri/icons/tray.png');
 // The Yard's staging logic, unchanged: its golden vectors in agent-guild pin this file.
 cpSync(path.resolve(guild, '../model.mjs'), 'web/vendor/model.mjs');
 // Grove's cast, as WORLDS.grove names it: its spirits, its familiars for agents and its drones for shells.

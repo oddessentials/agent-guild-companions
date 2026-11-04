@@ -1,9 +1,9 @@
 # Grove Companion
 
-One of the Grove's spirits on your desktop, with no window round it, reacting to what your
-[Agent Guild](https://github.com/oddessentials/agent-guild) sessions are doing.
+A Grove spirit on your desktop, with no window round it, reacting to what your
+[Agent Guild](https://github.com/oddessentials/agent-guild) sessions are doing. There is nothing to set up: it finds Agent Guild whenever that's running.
 
-Drag the character to move it. Everything around it clicks through to what's underneath. Choose a spirit or quit from the tray icon.
+It works where you put it, and when everything goes quiet it walks a little way off to rest. Drag it to move it. Everything around it clicks through to what's underneath. Quit from the tray icon.
 
 ## How it works
 
@@ -24,7 +24,7 @@ npm run dev
 npm run build    # src-tauri/target/release/agent-guild-companions.exe
 ```
 
-`COMPANION_SPIRIT=<0-5>` and `COMPANION_SIZE=<width>x<height>` try a spirit or a size. `AGENT_GUILD_HOME` points it at another manager's data folder. Test against a scratch manager with its own `AGENT_GUILD_HOME` and `AGENT_GUILD_PORT`, never the one that may be hosting your work.
+`AGENT_GUILD_HOME` points it at another manager's data folder. Test against a scratch manager with its own `AGENT_GUILD_HOME` and `AGENT_GUILD_PORT`, never the one that may be hosting your work.
 
 ## License
 
