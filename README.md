@@ -28,9 +28,9 @@ npm run build    # src-tauri/target/release/agent-guild-companions.exe
 
 ## Releases
 
-For Windows and macOS. A pull request's title becomes its commit on `main` and decides the next version, in [Conventional Commits](https://www.conventionalcommits.org/): `fix` a patch, `feat` a minor version, others none.
+For Windows; macOS joins when the repository variable `MACOS_RELEASES` is `true`, which needs Apple's secrets in the `release-signing` environment. A pull request's title becomes its commit on `main` and decides the next version, in [Conventional Commits](https://www.conventionalcommits.org/): `fix` a patch, `feat` a minor version, others none.
 
-Merging to `main` runs `.github/workflows/release.yml`, which tests, builds, signs and notarizes both installers, starts the app, holds the installers in a draft release, checks what the draft holds, and only then tags it and makes it public.
+Merging to `main` runs `.github/workflows/release.yml`, which tests, builds and signs the installers, starts the app, installs and uninstalls it, holds the installers in a draft release, checks what the draft holds, and only then tags it and makes it public.
 
 | When | What to do |
 | --- | --- |
