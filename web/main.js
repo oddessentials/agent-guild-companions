@@ -1,12 +1,14 @@
 import * as THREE from './vendor/three.module.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { clone as cloneSkeleton } from './vendor/SkeletonUtils.js';
-import { arrives, clipFor, hash, SHOWN_HELPERS, WORLDS } from './vendor/model.mjs';
+import { clipFor, hash, SHOWN_HELPERS, STAGING, WORLDS } from './vendor/model.mjs';
+import { placesFrom, stepToward } from './places.js';
 import { applyEvent, reactionTo } from './reactions.js';
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
-const { getCurrentWindow, cursorPosition } = window.__TAURI__.window;
+const { PhysicalPosition } = window.__TAURI__.dpi;
+const { getCurrentWindow, cursorPosition, currentMonitor } = window.__TAURI__.window;
 const win = getCurrentWindow();
 
 const FPS = 30;
@@ -15,10 +17,12 @@ const HIT_ALPHA = 32; // of 255: anything fainter than this is not the character
 const HIT_RADIUS = 2; // pixels round the cursor, so the outline is not a one-pixel target
 const FIT_SAMPLES = 4; // poses sampled from each clip to fit the camera
 const VIEW_DIRECTION = new THREE.Vector3(0.28, 0.32, 1); // a little above and to one side
-const FADE = 0.25; // seconds between clips
-const WALK_SECONDS = 1.6; // the Yard walks between places; here the walk plays where it stands
-const SPIRIT_KEY = 'spirit';
-const DEFAULT_SPIRIT = 3;
+const FADE = 0.3; // seconds between clips, as in the Yard
+const TURN = 7; // radians a second, as in the Yard
+const SPIRIT = 3; // the bird
+const REST_DISTANCE = 220; // CSS pixels between where it works and where it rests
+const DRAG_SETTLE_MS = 400; // no walking this soon after someone moved the window
+const WALK_ECHO = 12; // pixels a move report may lag behind a walk and still be the walk's own
 
 // The Yard's size and height (renderer.js helpers()). Its helperOffset ring needs its high camera: from
 // this low one, helpers in the ring stand in front of the character or hide behind it. So they stand to
@@ -61,7 +65,7 @@ const asset = (name) => {
   return assets.get(name);
 };
 
-let character = null; // { model, mixer, clips, action, clip, height }
+let character = null; // { model, mixer, clips, action, clip, height, speed, heading }
 let fit = null; // what fitCamera last framed, to frame it again if the window changes size
 
 /** Frames every clip's sampled poses, the ring of helpers and the marks above, so nothing is cut off. */
@@ -132,7 +136,7 @@ function crossTo(name, loop) {
 }
 
 function playMode() {
-  if (!character || !reaction || walkingUntil) return;
+  if (!character || !reaction || walking) return;
   if (character.clip && character.clipMode === reaction.mode && character.clip !== 'walk') return;
   character.clipMode = reaction.mode;
   character.clipCount = 0;
@@ -140,16 +144,11 @@ function playMode() {
 }
 
 function nextClip() {
-  if (!reaction || walkingUntil) return;
+  if (!reaction || walking) return;
   character.clipCount += 1;
   const name = clipFor(reaction.id, character.clipMode, character.clipCount);
   if (name === character.clip) character.action.reset().play();
   else crossTo(name, THREE.LoopOnce);
-}
-
-function walkThen() {
-  walkingUntil = performance.now() + WALK_SECONDS * 1000;
-  if (character) crossTo('walk', THREE.LoopRepeat);
 }
 
 async function loadSpirit(n) {
@@ -172,7 +171,9 @@ async function loadSpirit(n) {
   mixer.stopAllAction();
   scene.add(model);
   mixer.addEventListener('finished', nextClip);
-  character = { model, mixer, clips, action: null, clip: null, clipMode: null, clipCount: 0, height };
+  // The model's own stride and cycle, so its planted feet do not slide as the window moves.
+  const speed = (yard?.stride ?? 1) / (yard?.cycle ?? 1);
+  character = { model, mixer, clips, action: null, clip: null, clipMode: null, clipCount: 0, height, speed, heading: 0 };
   playMode();
 }
 
@@ -218,7 +219,7 @@ async function syncHelpers(wanted) {
       if (node.userData?.yard) yard = node.userData.yard;
     });
     scene.add(model);
-    const helper = { id: agent.id, model, mixer: new THREE.AnimationMixer(model), clips: source.animations, action: null, top: (yard?.height ?? 1) * HELPER_SCALE };
+    const helper = { id: agent.id, model, mixer: new THREE.AnimationMixer(model), clips: source.animations, action: null, top: (yard?.height ?? 1) * HELPER_SCALE, offset, pose: agent.pose, moving: false };
     helperClip(helper, agent.pose);
     helper.mixer.update(0.3 + (hash(agent.id) % 40) / 10);
     return helper;
@@ -279,7 +280,7 @@ function syncMarks() {
 
 function stepMarks(dt) {
   for (const [key, mark] of marks) {
-    const on = mark.target && !(mark.kind === 'asleep' && walkingUntil) ? 1 : 0;
+    const on = mark.target && !(mark.kind === 'asleep' && walking) ? 1 : 0;
     mark.age += dt;
     mark.alpha = Math.max(0, Math.min(1, mark.alpha + (on ? dt : -dt) / MARK_FADE));
     if (!mark.target && !mark.alpha) {
@@ -321,23 +322,14 @@ function stepMarks(dt) {
 // The manager's events, from the native side, which holds the token and the connection.
 let sessions = new Map();
 let reaction = null;
-let walkingUntil = 0;
+let walking = false;
 let changeTimer = 0;
-const seen = new Set();
 
 function react() {
   const now = Date.now();
-  const previous = reaction?.mode;
   reaction = reactionTo([...sessions.values()], now);
   clearTimeout(changeTimer);
   if (reaction.nextChange !== null) changeTimer = setTimeout(react, Math.max(0, reaction.nextChange - now) + 50);
-
-  // The Yard walks a session out of its door, and between its station and the plaza.
-  const stepsOut = [...sessions.values()].some((session) => !seen.has(session.id) && arrives(session, now));
-  for (const id of sessions.keys()) seen.add(id);
-  const changedPlace = previous !== undefined && previous !== reaction.mode && (previous === 'rest' || reaction.mode === 'rest');
-  if ((stepsOut || changedPlace) && character) walkThen();
-
   invoke('report', { message: `reaction: ${reaction.mode}, mark ${reaction.crewMark}, helpers ${reaction.helpers.map((helper) => helper.pose).join(' ') || 'none'}` });
   playMode();
   syncMarks();
@@ -358,7 +350,98 @@ function setIgnoring(value) {
   win.setIgnoreCursorEvents(value);
 }
 
-await win.onMoved(({ payload }) => { origin = payload; });
+// Walking: the window itself travels between the two places, as the Yard's characters walk between
+// station and plaza. pos is exact; the window only goes to whole pixels, sent is where it was last told.
+let pos = { x: origin.x, y: origin.y };
+let sent = { x: origin.x, y: origin.y };
+let places = null;
+let draggedAt = -Infinity;
+let monitor = await currentMonitor();
+
+const workArea = () => monitor?.workArea
+  ?? { position: { x: 0, y: 0 }, size: { width: screen.width * window.devicePixelRatio, height: screen.height * window.devicePixelRatio } };
+
+function placeHere() {
+  places = placesFrom(Math.round(pos.x), reaction.mode, REST_DISTANCE * window.devicePixelRatio, gl.drawingBufferWidth, workArea());
+}
+
+await win.onMoved(({ payload }) => {
+  origin = payload;
+  const off = Math.hypot(payload.x - sent.x, payload.y - sent.y);
+  if (off <= (walking ? WALK_ECHO : 0)) return;
+  // Not our own walk, so someone moved it: where it was put is now its place.
+  draggedAt = performance.now();
+  pos = { x: payload.x, y: payload.y };
+  sent = { x: payload.x, y: payload.y };
+  if (walking) {
+    walking = false;
+    character.clip = null;
+    playMode();
+  }
+  placeHere();
+  currentMonitor().then((current) => { monitor = current; }).catch(() => {});
+});
+
+const angleTo = (from, to) => {
+  let d = (to - from) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+};
+const turnToward = (from, to, dt) => {
+  const turn = angleTo(from, to);
+  return from + Math.sign(turn) * Math.min(Math.abs(turn), TURN * dt);
+};
+
+// The Yard's advance and its helpers' trailing (renderer.js).
+function advance(dt) {
+  if (!character || !places) return;
+  const target = reaction.mode === 'rest' ? places.rest : places.home;
+  let moved = 0; // metres the character covered this frame
+  if (pos.x !== target && performance.now() - draggedAt >= DRAG_SETTLE_MS) {
+    if (!walking) {
+      walking = true;
+      crossTo('walk', THREE.LoopRepeat);
+    }
+    const pixelsPerMetre = gl.drawingBufferHeight / (camera.top - camera.bottom);
+    const next = stepToward(pos.x, target, character.speed * pixelsPerMetre, dt);
+    moved = (next - pos.x) / pixelsPerMetre;
+    pos.x = next;
+    const whole = Math.round(next);
+    if (whole !== sent.x) {
+      sent.x = whole;
+      win.setPosition(new PhysicalPosition(whole, sent.y));
+    }
+    if (next === target) {
+      walking = false;
+      character.clip = null;
+      playMode();
+    }
+  }
+  let want = reaction.mode === 'rest' ? 0 : STAGING.stationFace;
+  // Straight along the screen, the way the window goes, which the camera's angle turns a little from world X.
+  if (walking) want = Math.atan2(Math.sign(target - pos.x) * screenRight.x, Math.sign(target - pos.x) * screenRight.z);
+  character.heading = turnToward(character.heading, want, dt);
+  character.model.rotation.y = character.heading;
+
+  // Helpers stay where they are in the world as the window moves, then catch up.
+  const pull = 1 - Math.exp(-4 * dt);
+  for (const helper of helpers) {
+    const p = helper.model.position;
+    p.addScaledVector(screenRight, -moved);
+    const dx = helper.offset.x - p.x;
+    const dz = helper.offset.z - p.z;
+    const far = Math.hypot(dx, dz);
+    p.x += dx * pull;
+    p.z += dz * pull;
+    helper.model.rotation.y = far > 0.05 ? Math.atan2(dx, dz) : turnToward(helper.model.rotation.y, 0, dt);
+    const moving = far > 0.08;
+    if (moving !== helper.moving) {
+      helper.moving = moving;
+      helperClip(helper, moving ? 'move' : helper.pose);
+    }
+  }
+}
 
 setInterval(async () => {
   if (dragging) return;
@@ -405,38 +488,26 @@ function frame(now) {
   if (now - last < 1000 / FPS - 1) return;
   last = now;
   const dt = clock.getDelta();
-  if (walkingUntil && performance.now() >= walkingUntil) {
-    walkingUntil = 0;
-    character.clip = null;
-    playMode();
-  }
+  advance(dt);
   character?.mixer.update(dt);
   for (const helper of helpers) helper.mixer.update(dt);
   stepMarks(dt);
   render();
 }
 
-function storedSpirit() {
-  try {
-    const stored = Number.parseInt(localStorage.getItem(SPIRIT_KEY) ?? '', 10);
-    return stored >= 0 && stored < 6 ? stored : DEFAULT_SPIRIT;
-  } catch {
-    return DEFAULT_SPIRIT;
-  }
-}
-
 try {
-  const { spirit } = await invoke('startup');
   reaction = reactionTo([], Date.now());
-  await loadSpirit(spirit ?? storedSpirit());
-  await listen('spirit', ({ payload }) => {
-    try { localStorage.setItem(SPIRIT_KEY, String(payload)); } catch { /* it just won't be remembered */ }
-    loadSpirit(payload).catch((error) => invoke('report', { message: `spirit: ${error}` }));
-  });
+  await loadSpirit(SPIRIT);
+  placeHere();
+  let greeted = false;
   await listen('manager', ({ payload }) => {
     sessions = applyEvent(sessions, payload);
-    if (payload.type === 'hello') for (const id of sessions.keys()) seen.add(id); // the Yard: no one steps out when a page opens
     react();
+    // As the Yard's characters do when a page opens: appear at the place, without walking there.
+    if (payload.type === 'hello' && !greeted) {
+      greeted = true;
+      placeHere();
+    }
   });
   react();
   character.mixer.update(0);

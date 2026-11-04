@@ -1,9 +1,9 @@
 # Grove Companion
 
-One of the Grove's spirits on your desktop, with no window round it, reacting to what your
-[Agent Guild](https://github.com/oddessentials/agent-guild) sessions are doing.
+A Grove spirit on your desktop, with no window round it, reacting to what your
+[Agent Guild](https://github.com/oddessentials/agent-guild) sessions are doing. There is nothing to set up: it finds Agent Guild whenever that's running.
 
-Drag the character to move it. Everything around it clicks through to what's underneath. Choose a spirit or quit from the tray icon.
+It works where you put it, and when everything goes quiet it walks a little way off to rest. Drag it to move it. Everything around it clicks through to what's underneath. Quit from the tray icon.
 
 ## How it works
 
@@ -24,7 +24,17 @@ npm run dev
 npm run build    # src-tauri/target/release/agent-guild-companions.exe
 ```
 
-`COMPANION_SPIRIT=<0-5>` and `COMPANION_SIZE=<width>x<height>` try a spirit or a size. `AGENT_GUILD_HOME` points it at another manager's data folder. Test against a scratch manager with its own `AGENT_GUILD_HOME` and `AGENT_GUILD_PORT`, never the one that may be hosting your work.
+`AGENT_GUILD_HOME` points it at another manager's data folder. Test against a scratch manager with its own `AGENT_GUILD_HOME` and `AGENT_GUILD_PORT`, never the one that may be hosting your work.
+
+## Releases
+
+For Windows and macOS. A pull request's title becomes its commit on `main` and decides the next version, in [Conventional Commits](https://www.conventionalcommits.org/): `fix` a patch, `feat` a minor version, others none.
+
+Merging to `main` runs `.github/workflows/release.yml`, which tests, builds, signs and notarizes both installers, holds them in a draft release, checks what the draft holds, and only then tags it and makes it public. If any step fails, nothing is published, and re-running the failed jobs picks up where it stopped.
+
+To stop releases, set the repository variable `RELEASES_ENABLED` to anything but `true`. Merges then still report the version they would release. The next merge after it is set back releases everything since the last release.
+
+Pull requests build unsigned installers as artifacts, for trying a change.
 
 ## License
 

@@ -20,10 +20,8 @@ fn data_dir() -> Option<PathBuf> {
     let env_dir = |name| std::env::var_os(name).map(PathBuf::from);
     if cfg!(windows) {
         Some(env_dir("APPDATA")?.join("AgentGuild"))
-    } else if cfg!(target_os = "macos") {
-        Some(env_dir("HOME")?.join("Library/Application Support/AgentGuild"))
     } else {
-        env_dir("XDG_CONFIG_HOME").or_else(|| Some(env_dir("HOME")?.join(".config"))).map(|dir| dir.join("agent-guild"))
+        Some(env_dir("HOME")?.join("Library/Application Support/AgentGuild"))
     }
 }
 
