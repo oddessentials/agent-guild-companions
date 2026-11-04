@@ -56,7 +56,7 @@ jobs:
       - name: Build the unsigned disk image
         run: npx tauri build --target universal-apple-darwin --bundles dmg -- --locked
       - name: Start the app
-        run: node scripts/smoke.mjs "src-tauri/target/universal-apple-darwin/release/bundle/macos/Grove Companion.app/Contents/MacOS/agent-guild-companions" "$RUNNER_TEMP/screen-macos.png"
+        run: node scripts/smoke.mjs "$(find "src-tauri/target/universal-apple-darwin/release/bundle/macos/Grove Companion.app/Contents/MacOS" -type f -perm -u+x)" "$RUNNER_TEMP/screen-macos.png"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-macos

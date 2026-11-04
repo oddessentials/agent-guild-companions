@@ -198,7 +198,7 @@ jobs:
           printf '{"version":"%s"}' "$VERSION" > "$RUNNER_TEMP/release.conf.json"
           npx tauri build --target universal-apple-darwin --bundles dmg --config "$RUNNER_TEMP/release.conf.json" -- --locked
       - name: Start the signed app
-        run: node scripts/smoke.mjs "src-tauri/target/universal-apple-darwin/release/bundle/macos/Grove Companion.app/Contents/MacOS/agent-guild-companions" "$RUNNER_TEMP/screen-macos.png"
+        run: node scripts/smoke.mjs "$(find "src-tauri/target/universal-apple-darwin/release/bundle/macos/Grove Companion.app/Contents/MacOS" -type f -perm -u+x)" "$RUNNER_TEMP/screen-macos.png"
       - name: Check the signature and notarization, and collect the disk image
         env:
           VERSION: ${{ needs.plan.outputs.version }}
