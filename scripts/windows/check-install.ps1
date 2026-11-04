@@ -1,7 +1,7 @@
-# Installs the app silently, checks what landed, and uninstalls it again. With -Publisher, also checks that
-# the app and its uninstaller are signed and timestamped by that publisher.
-#   ./scripts/windows/check-install.ps1 -Installer <setup.exe> [-Publisher <certificate subject>]
-param([Parameter(Mandatory)][string]$Installer, [string]$Publisher)
+# Does what a person does: installs the app silently, starts what was installed, and uninstalls it. With
+# -Publisher, also checks that the installed app and uninstaller are signed and timestamped by that publisher.
+#   ./scripts/windows/check-install.ps1 -Installer <setup.exe> -Screenshot <screen.png> [-Publisher <certificate subject>]
+param([Parameter(Mandatory)][string]$Installer, [Parameter(Mandatory)][string]$Screenshot, [string]$Publisher)
 $ErrorActionPreference = 'Stop'
 
 $dir = Join-Path $env:LOCALAPPDATA 'Grove Companion'
@@ -20,9 +20,12 @@ foreach ($file in $app, $uninstaller) {
   }
 }
 
+node (Join-Path $PSScriptRoot '..\smoke.mjs') $app $Screenshot
+if ($LASTEXITCODE -ne 0) { throw "The installed app failed its start check with exit code $LASTEXITCODE." }
+
 # The uninstaller copies itself and returns at once, so wait for the app to go.
 $remove = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
 if ($remove.ExitCode -ne 0) { throw "The uninstaller exited with code $($remove.ExitCode)." }
 for ($i = 0; $i -lt 60 -and (Test-Path -LiteralPath $app); $i++) { Start-Sleep -Seconds 1 }
 if (Test-Path -LiteralPath $app) { throw "The uninstaller left $app behind." }
-Write-Output 'Installed, checked and uninstalled.'
+Write-Output 'Installed, started, checked and uninstalled.'
