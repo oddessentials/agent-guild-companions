@@ -3,7 +3,7 @@
 A Grove spirit on your desktop, with no window round it, reacting to what your
 [Agent Guild](https://github.com/oddessentials/agent-guild) sessions are doing. There is nothing to set up: it finds Agent Guild whenever that's running.
 
-It works where you put it, and when everything goes quiet it walks a little way off to rest. Drag it to move it. Everything around it clicks through to what's underneath. Quit from the tray icon.
+It works where you put it, and when everything goes quiet it walks a little way off to rest. Drag it to move it. Everything around it clicks through to what's underneath. It stays where you put it, and starts when you sign in, which you can turn off in Windows' Startup apps. Quit from the tray icon.
 
 ## How it works
 

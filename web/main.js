@@ -2,13 +2,13 @@ import * as THREE from './vendor/three.module.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { clone as cloneSkeleton } from './vendor/SkeletonUtils.js';
 import { clipFor, hash, SHOWN_HELPERS, STAGING, WORLDS } from './vendor/model.mjs';
-import { placesFrom, stepToward } from './places.js';
+import { isOnScreen, placesFrom, stepToward } from './places.js';
 import { applyEvent, reactionTo } from './reactions.js';
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { PhysicalPosition } = window.__TAURI__.dpi;
-const { getCurrentWindow, cursorPosition, currentMonitor } = window.__TAURI__.window;
+const { availableMonitors, getCurrentWindow, cursorPosition, currentMonitor } = window.__TAURI__.window;
 const win = getCurrentWindow();
 
 const FPS = 30;
@@ -20,6 +20,7 @@ const VIEW_DIRECTION = new THREE.Vector3(0.28, 0.32, 1); // a little above and t
 const FADE = 0.3; // seconds between clips, as in the Yard
 const TURN = 7; // radians a second, as in the Yard
 const SPIRIT = 3; // the bird
+const SPOT_KEY = 'spot'; // where it was last put
 const REST_DISTANCE = 220; // CSS pixels between where it works and where it rests
 const DRAG_SETTLE_MS = 400; // no walking this soon after someone moved the window
 const WALK_ECHO = 12; // pixels a move report may lag behind a walk and still be the walk's own
@@ -373,6 +374,7 @@ await win.onMoved(({ payload }) => {
   draggedAt = performance.now();
   pos = { x: payload.x, y: payload.y };
   sent = { x: payload.x, y: payload.y };
+  try { localStorage.setItem(SPOT_KEY, JSON.stringify(sent)); } catch { /* it just won't be remembered */ }
   if (walking) {
     walking = false;
     character.clip = null;
@@ -381,6 +383,20 @@ await win.onMoved(({ payload }) => {
   placeHere();
   currentMonitor().then((current) => { monitor = current; }).catch(() => {});
 });
+
+/** Back where it was last put, if that spot is still on a screen. */
+async function restoreSpot() {
+  let spot = null;
+  try { spot = JSON.parse(localStorage.getItem(SPOT_KEY)); } catch { return; }
+  if (!Number.isInteger(spot?.x) || !Number.isInteger(spot?.y)) return;
+  const areas = (await availableMonitors()).map((each) => each.workArea);
+  if (!isOnScreen(spot, gl.drawingBufferWidth, gl.drawingBufferHeight, areas)) return;
+  pos = { x: spot.x, y: spot.y };
+  sent = { x: spot.x, y: spot.y };
+  origin = { x: spot.x, y: spot.y };
+  await win.setPosition(new PhysicalPosition(spot.x, spot.y));
+  monitor = await currentMonitor();
+}
 
 const angleTo = (from, to) => {
   let d = (to - from) % (2 * Math.PI);
@@ -498,6 +514,7 @@ function frame(now) {
 try {
   reaction = reactionTo([], Date.now());
   await loadSpirit(SPIRIT);
+  await restoreSpot();
   placeHere();
   let greeted = false;
   await listen('manager', ({ payload }) => {

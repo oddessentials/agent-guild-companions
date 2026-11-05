@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 $dir = Join-Path $env:LOCALAPPDATA 'Grove Companion'
 $app = Join-Path $dir 'agent-guild-companions.exe'
 $uninstaller = Join-Path $dir 'uninstall.exe'
+$startup = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$entry = 'Grove Companion'
 
 $install = Start-Process -FilePath $Installer -ArgumentList '/S' -Wait -PassThru
 if ($install.ExitCode -ne 0) { throw "The installer exited with code $($install.ExitCode)." }
@@ -20,6 +22,9 @@ foreach ($file in $app, $uninstaller) {
   }
 }
 
+$starts = (Get-ItemProperty -Path $startup -Name $entry -ErrorAction SilentlyContinue).$entry
+if ($starts -ne "`"$app`"") { throw "The installer should start `"$app`" at sign-in, not: $starts" }
+
 node (Join-Path $PSScriptRoot '..\smoke.mjs') $app $Screenshot
 if ($LASTEXITCODE -ne 0) { throw "The installed app failed its start check with exit code $LASTEXITCODE." }
 
@@ -28,4 +33,5 @@ $remove = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThr
 if ($remove.ExitCode -ne 0) { throw "The uninstaller exited with code $($remove.ExitCode)." }
 for ($i = 0; $i -lt 60 -and (Test-Path -LiteralPath $app); $i++) { Start-Sleep -Seconds 1 }
 if (Test-Path -LiteralPath $app) { throw "The uninstaller left $app behind." }
+if ((Get-ItemProperty -Path $startup -Name $entry -ErrorAction SilentlyContinue).$entry) { throw 'The uninstaller left the app starting at sign-in.' }
 Write-Output 'Installed, started, checked and uninstalled.'

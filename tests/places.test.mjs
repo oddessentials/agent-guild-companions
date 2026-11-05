@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { placesFrom, stepToward } from '../web/places.js';
+import { isOnScreen, placesFrom, stepToward } from '../web/places.js';
 
 const area = { position: { x: 0, y: 0 }, size: { width: 1920, height: 1040 } };
 
@@ -19,6 +19,14 @@ test('put down while resting, it stays there and works a walk away', () => {
 test('the side is worked out on the monitor it is on', () => {
   const second = { position: { x: 1920, y: 0 }, size: { width: 1920, height: 1040 } };
   assert.deepEqual(placesFrom(2000, 'work', 220, 270, second), { home: 2000, rest: 2220 });
+});
+
+test('a saved spot counts only while its middle is on a connected screen', () => {
+  const second = { position: { x: 1920, y: 0 }, size: { width: 1920, height: 1040 } };
+  assert.equal(isOnScreen({ x: 100, y: 100 }, 270, 240, [area]), true);
+  assert.equal(isOnScreen({ x: 2500, y: 100 }, 270, 240, [area]), false);
+  assert.equal(isOnScreen({ x: 2500, y: 100 }, 270, 240, [area, second]), true);
+  assert.equal(isOnScreen({ x: 1900, y: 100 }, 270, 240, [area]), false);
 });
 
 test('a step moves at speed and stops on the target', () => {
