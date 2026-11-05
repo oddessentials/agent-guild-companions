@@ -1,5 +1,6 @@
 // Copies Three.js and Grove's six spirits into web/, so the app needs no bundler and no art download.
 // Run with agent-guild checked out beside this repo, or pass its path.
+import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -27,3 +28,5 @@ for (const model of models) cpSync(`${guild}/${model}.glb`, `web/assets/${model}
 for (const file of readdirSync(`${guild}/maps`).filter((name) => models.includes(name.split('-')[0]))) {
   cpSync(`${guild}/maps/${file}`, `web/assets/maps/${file}`);
 }
+// The Yard's 2048 px textures cost about 150 MB more here and look no better on a character this small.
+execFileSync('python', ['-I', 'scripts/shrink_maps.py', 'web/assets/maps', '512'], { stdio: 'inherit' });

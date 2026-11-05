@@ -14,7 +14,7 @@ It works where you put it, and when everything goes quiet it walks a little way 
 
 ## Working on it
 
-Needs Node.js 22 or newer, Rust, and agent-guild checked out beside this repo.
+Needs Node.js 22 or newer, Rust, and agent-guild checked out beside this repo. `npm run vendor` also needs Python with Pillow.
 
 ```sh
 npm install
