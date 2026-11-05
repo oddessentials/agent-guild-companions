@@ -9,6 +9,13 @@ export function placesFrom(x, mode, distance, windowWidth, area) {
   return mode === 'rest' ? { home: other, rest: x } : { home: x, rest: other };
 }
 
+/** Whether a window at this spot still has its middle on a connected screen, so a saved spot can't lose it. */
+export function isOnScreen(spot, windowWidth, windowHeight, areas) {
+  const x = spot.x + windowWidth / 2;
+  const y = spot.y + windowHeight / 2;
+  return areas.some(({ position, size }) => x >= position.x && x < position.x + size.width && y >= position.y && y < position.y + size.height);
+}
+
 /** How far to move this frame, never past the target. */
 export function stepToward(x, target, speed, dt) {
   const left = target - x;
