@@ -39,7 +39,9 @@
     "category": "Utility",
     "shortDescription": "A Grove spirit on your desktop, reacting to your Agent Guild sessions.",
     "license": "AGPL-3.0-only",
-    "licenseFile": "../LICENSE",
+    "resources": {
+      "../LICENSE": "LICENSE"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",
