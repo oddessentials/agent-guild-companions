@@ -37,6 +37,8 @@ function capture() {
 function fail(message) {
   console.error(`::error::${message}`);
   console.error(log);
+  capture();
+  writeFileSync(`${screenshot}.log`, log);
   app.kill();
   process.exit(1);
 }
@@ -45,7 +47,7 @@ const deadline = Date.now() + READY_SECONDS * 1000;
 while (!/^ready: /m.test(log)) {
   if (/^failed: /m.test(log)) fail('The app could not start.');
   if (exited) fail(`The app exited before its first frame: ${JSON.stringify(exited)}.`);
-  if (Date.now() > deadline) fail(`The app drew nothing within ${READY_SECONDS} s.`);
+  if (Date.now() > deadline) fail(`The app drew nothing within ${READY_SECONDS} s and is still running. Its last line above shows how far it got.`);
   await sleep(250);
 }
 await sleep(SETTLE_SECONDS * 1000);

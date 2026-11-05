@@ -10,6 +10,8 @@ const { listen } = window.__TAURI__.event;
 const { PhysicalPosition } = window.__TAURI__.dpi;
 const { availableMonitors, getCurrentWindow, cursorPosition, currentMonitor } = window.__TAURI__.window;
 const win = getCurrentWindow();
+const step = (message) => invoke('report', { message: `start: ${message}` });
+step('script loaded');
 
 const FPS = 30;
 const HIT_POLL_MS = 100; // how often the pixel under the cursor decides click-through
@@ -362,6 +364,7 @@ function react() {
 
 // A window that ignores the cursor gets no mouse events, so the cursor is polled instead, and the
 // pixel under it read back straight after a render, while the drawing buffer still holds it.
+step('reading the window');
 let origin = await win.outerPosition();
 let ignoring = false;
 let dragging = false;
@@ -536,7 +539,9 @@ function frame(now) {
 
 try {
   reaction = reactionTo([], Date.now());
+  step('loading the spirit');
   await loadSpirit(savedSpirit());
+  step('placing the window');
   await restoreSpot();
   placeHere();
   let greeted = false;
@@ -557,8 +562,10 @@ try {
   });
   invoke('spirit_shown', { n: character.n });
   react();
+  step('drawing');
   character.mixer.update(0);
   render();
+  step('showing the window');
   await win.show();
   requestAnimationFrame(frame);
   await invoke('connect_manager');
