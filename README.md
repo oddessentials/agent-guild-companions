@@ -1,9 +1,19 @@
+<p align="center">
+  <a href="https://github.com/oddessentials/agent-guild-companions/releases/latest">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset=".github/assets/install-now-dark.svg" />
+      <source media="(prefers-color-scheme: light)" srcset=".github/assets/install-now-light.svg" />
+      <img src=".github/assets/install-now-light.svg" width="560" alt="Install Agent Guild: Grove Companion for Windows or macOS" />
+    </picture>
+  </a>
+</p>
+
 # Grove Companion
 
 A Grove spirit on your desktop, with no window round it, reacting to what your
 [Agent Guild](https://github.com/oddessentials/agent-guild) sessions are doing. There is nothing to set up: it finds Agent Guild whenever that's running.
 
-It works where you put it, and when everything goes quiet it walks a little way off to rest. Drag it to move it. Everything around it clicks through to what's underneath. It stays where you put it, and starts when you sign in, which you can turn off in Windows' Startup apps. Quit from the tray icon.
+It works where you put it, and when everything goes quiet it walks a little way off to rest. Drag it to move it. Everything around it clicks through to what's underneath. It stays where you put it, and starts when you sign in, which you can turn off in Windows' Startup apps. On macOS, open it and drag it the same way. Quit from the tray icon.
 
 ## How it works
 
@@ -28,9 +38,9 @@ npm run build    # src-tauri/target/release/agent-guild-companions.exe
 
 ## Releases
 
-For Windows; macOS joins when the repository variable `MACOS_RELEASES` is `true`, which needs Apple's secrets in the `release-signing` environment. A pull request's title becomes its commit on `main` and decides the next version, in [Conventional Commits](https://www.conventionalcommits.org/): `fix` a patch, `feat` a minor version, others none.
+For Windows and macOS. The repository variable `MACOS_RELEASES` keeps macOS in a release, and needs Apple's secrets in the `release-signing` environment. A pull request's title becomes its commit on `main` and decides the next version, in [Conventional Commits](https://www.conventionalcommits.org/): `fix` a patch, `feat` a minor version, others none.
 
-Merging to `main` runs `.github/workflows/release.yml`, which tests, builds and signs the installers, starts the app, installs and uninstalls it, holds the installers in a draft release, checks what the draft holds, and only then tags it and makes it public.
+Merging to `main` runs `.github/workflows/release.yml`, which tests, builds, signs and notarizes the installers, starts the app, installs and uninstalls it on Windows, holds the installers in a draft release, checks what the draft holds, and only then tags it and makes it public.
 
 | When | What to do |
 | --- | --- |
