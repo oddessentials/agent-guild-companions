@@ -20,6 +20,7 @@ const VIEW_DIRECTION = new THREE.Vector3(0.28, 0.32, 1); // a little above and t
 const FADE = 0.3; // seconds between clips, as in the Yard
 const TURN = 7; // radians a second, as in the Yard
 const SPIRIT = 3; // the bird
+const SPIRIT_KEY = 'spirit';
 const SPOT_KEY = 'spot'; // where it was last put
 const REST_DISTANCE = 220; // CSS pixels between where it works and where it rests
 const DRAG_SETTLE_MS = 400; // no walking this soon after someone moved the window
@@ -66,7 +67,8 @@ const asset = (name) => {
   return assets.get(name);
 };
 
-let character = null; // { model, mixer, clips, action, clip, height, speed, heading }
+let character = null; // { n, model, mixer, clips, action, clip, height, speed, heading }
+let spiritRequest = 0;
 let fit = null; // what fitCamera last framed, to frame it again if the window changes size
 
 /** Frames every clip's sampled poses, the ring of helpers and the marks above, so nothing is cut off. */
@@ -153,7 +155,10 @@ function nextClip() {
 }
 
 async function loadSpirit(n) {
+  const request = ++spiritRequest;
   const gltf = await asset(`${GROVE.characters}${n}`);
+  if (request !== spiritRequest) return;
+  const heading = character?.heading ?? 0;
   if (character) {
     scene.remove(character.model);
     character.mixer.stopAllAction();
@@ -174,8 +179,26 @@ async function loadSpirit(n) {
   mixer.addEventListener('finished', nextClip);
   // The model's own stride and cycle, so its planted feet do not slide as the window moves.
   const speed = (yard?.stride ?? 1) / (yard?.cycle ?? 1);
-  character = { model, mixer, clips, action: null, clip: null, clipMode: null, clipCount: 0, height, speed, heading: 0 };
-  playMode();
+  character = { n, model, mixer, clips, action: null, clip: null, clipMode: null, clipCount: 0, height, speed, heading };
+  model.rotation.y = heading;
+  if (walking) crossTo('walk', THREE.LoopRepeat);
+  else playMode();
+}
+
+function savedSpirit() {
+  try {
+    const saved = localStorage.getItem(SPIRIT_KEY);
+    const n = Number(saved);
+    return saved !== null && Number.isInteger(n) && n >= 0 && n < 6 ? n : SPIRIT;
+  } catch { return SPIRIT; }
+}
+
+async function chooseSpirit(n) {
+  if (n === character?.n) spiritRequest += 1;
+  else await loadSpirit(n);
+  if (character?.n !== n) return;
+  try { localStorage.setItem(SPIRIT_KEY, String(n)); } catch {}
+  invoke('spirit_shown', { n });
 }
 
 // Helpers: the Yard's helpers() and helperClip() (renderer.js), round a character that stays put.
@@ -513,7 +536,7 @@ function frame(now) {
 
 try {
   reaction = reactionTo([], Date.now());
-  await loadSpirit(SPIRIT);
+  await loadSpirit(savedSpirit());
   await restoreSpot();
   placeHere();
   let greeted = false;
@@ -526,6 +549,13 @@ try {
       placeHere();
     }
   });
+  await listen('spirit', ({ payload }) => {
+    chooseSpirit(payload).catch((error) => {
+      invoke('report', { message: `spirit: ${error}` });
+      invoke('spirit_shown', { n: character.n });
+    });
+  });
+  invoke('spirit_shown', { n: character.n });
   react();
   character.mixer.update(0);
   render();
