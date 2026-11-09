@@ -61,33 +61,67 @@ struct Characters {
     checking: Mutex<Option<(String, oneshot::Sender<Option<String>>)>>,
 }
 
-fn refresh_menu(app: &AppHandle) -> tauri::Result<()> {
-    let state = app.state::<Characters>();
-    let shown = state.shown.lock().unwrap().clone();
-    let unavailable = state.unavailable.lock().unwrap().clone();
-    let idle = !state.busy.load(Ordering::SeqCst) && shown.is_some();
-    let menu = &state.menu;
-    for item in menu.items()? {
-        menu.remove(&item)?;
-    }
-    for (n, name) in SPIRITS.iter().enumerate() {
-        menu.append(&CheckMenuItem::with_id(app, format!("spirit-{n}"), *name, shown.is_some(), shown.as_deref() == Some(&n.to_string()), None::<&str>)?)?;
-    }
-    let added = characters::list_characters(&state.dir);
+#[derive(Debug, PartialEq)]
+enum Entry {
+    Check { id: String, label: String, enabled: bool, checked: bool },
+    Item { id: String, label: String, enabled: bool },
+    Separator,
+    Submenu { id: String, label: String, enabled: bool, items: Vec<Entry> },
+}
+
+fn menu_entries(shown: Option<&str>, added: &[characters::Character], unavailable: &HashSet<String>, busy: bool) -> Vec<Entry> {
+    let idle = !busy && shown.is_some();
+    let mut entries: Vec<Entry> = SPIRITS
+        .iter()
+        .enumerate()
+        .map(|(n, name)| Entry::Check { id: format!("spirit-{n}"), label: name.to_string(), enabled: shown.is_some(), checked: shown == Some(n.to_string().as_str()) })
+        .collect();
     if !added.is_empty() {
-        menu.append(&PredefinedMenuItem::separator(app)?)?;
+        entries.push(Entry::Separator);
     }
-    let label = |character: &characters::Character, lost: bool| if lost { format!("{} (can’t be shown)", character.title) } else { character.title.clone() };
-    let remove = Submenu::with_id(app, "remove", "Remove character", idle && !added.is_empty())?;
-    for character in &added {
+    let mut removals = Vec::new();
+    for character in added {
         let lost = !character.readable || unavailable.contains(&character.id);
-        menu.append(&CheckMenuItem::with_id(app, format!("character-{}", character.id), label(character, lost), shown.is_some() && !lost, shown.as_ref() == Some(&character.id), None::<&str>)?)?;
-        remove.append(&MenuItem::with_id(app, format!("remove-{}", character.id), label(character, lost), true, None::<&str>)?)?;
+        let label = if lost { format!("{} (can’t be shown)", character.title) } else { character.title.clone() };
+        entries.push(Entry::Check { id: format!("character-{}", character.id), label: label.clone(), enabled: shown.is_some() && !lost, checked: shown == Some(character.id.as_str()) });
+        removals.push(Entry::Item { id: format!("remove-{}", character.id), label, enabled: true });
     }
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "add-character", "Add character…", idle, None::<&str>)?)?;
-    menu.append(&remove)?;
+    entries.push(Entry::Separator);
+    entries.push(Entry::Item { id: "add-character".into(), label: "Add character…".into(), enabled: idle });
+    entries.push(Entry::Submenu { id: "remove".into(), label: "Remove character".into(), enabled: idle && !added.is_empty(), items: removals });
+    entries
+}
+
+fn append(app: &AppHandle, menu: &Submenu<Wry>, entries: &[Entry]) -> tauri::Result<()> {
+    for entry in entries {
+        match entry {
+            Entry::Check { id, label, enabled, checked } => menu.append(&CheckMenuItem::with_id(app, id, label, *enabled, *checked, None::<&str>)?)?,
+            Entry::Item { id, label, enabled } => menu.append(&MenuItem::with_id(app, id, label, *enabled, None::<&str>)?)?,
+            Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
+            Entry::Submenu { id, label, enabled, items } => {
+                let submenu = Submenu::with_id(app, id, label, *enabled)?;
+                append(app, &submenu, items)?;
+                menu.append(&submenu)?;
+            }
+        }
+    }
     Ok(())
+}
+
+/// One main-thread task per rebuild, reading the state when it runs, so rebuilds never interleave and a queued one is never stale.
+fn refresh_menu(app: &AppHandle) {
+    let app = app.clone();
+    let task = app.clone();
+    let _ = task.run_on_main_thread(move || {
+        let state = app.state::<Characters>();
+        let shown = state.shown.lock().unwrap().clone();
+        let unavailable = state.unavailable.lock().unwrap().clone();
+        let entries = menu_entries(shown.as_deref(), &characters::list_characters(&state.dir), &unavailable, state.busy.load(Ordering::SeqCst));
+        let rebuilt = state.menu.items().and_then(|items| items.iter().try_for_each(|item| state.menu.remove(item))).and_then(|_| append(&app, &state.menu, &entries));
+        if let Err(err) = rebuilt {
+            eprintln!("menu: {err}");
+        }
+    });
 }
 
 fn tell(app: &AppHandle, title: &str, message: String) {
@@ -99,10 +133,10 @@ async fn exclusive<F: std::future::Future<Output = ()>>(app: &AppHandle, work: F
     if state.busy.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = refresh_menu(app);
+    refresh_menu(app);
     work.await;
     state.busy.store(false, Ordering::SeqCst);
-    let _ = refresh_menu(app);
+    refresh_menu(app);
 }
 
 async fn add_character(app: AppHandle) {
@@ -185,7 +219,7 @@ fn connect_manager(app: AppHandle) {
 #[tauri::command]
 fn spirit_shown(app: AppHandle, id: String) {
     *app.state::<Characters>().shown.lock().unwrap() = Some(id);
-    let _ = refresh_menu(&app);
+    refresh_menu(&app);
 }
 
 #[tauri::command]
@@ -201,7 +235,7 @@ fn character_checked(state: tauri::State<Characters>, token: String, problem: Op
 fn character_unavailable(app: AppHandle, id: String, problem: String) {
     eprintln!("character {id}: {problem}");
     app.state::<Characters>().unavailable.lock().unwrap().insert(id);
-    let _ = refresh_menu(&app);
+    refresh_menu(&app);
 }
 
 #[tauri::command]
@@ -259,7 +293,7 @@ fn main() {
             characters::sweep(&dir);
             let spirit_menu = Submenu::with_id(app, "spirit", "Spirit", true)?;
             app.manage(Characters { dir, menu: spirit_menu.clone(), shown: Mutex::new(None), unavailable: Mutex::default(), busy: AtomicBool::new(false), checking: Mutex::new(None) });
-            refresh_menu(app.handle())?;
+            refresh_menu(app.handle());
 
             let menu = Menu::new(app)?;
             menu.append(&spirit_menu)?;
@@ -287,4 +321,61 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("the companion could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn character(n: u8, readable: bool) -> characters::Character {
+        characters::Character { id: format!("00000000-0000-4000-8000-00000000000{n}"), title: format!("Piece {n}"), readable }
+    }
+
+    fn flat(entries: &[Entry]) -> Vec<(&str, &Entry)> {
+        entries
+            .iter()
+            .flat_map(|entry| match entry {
+                Entry::Check { id, .. } | Entry::Item { id, .. } => vec![(id.as_str(), entry)],
+                Entry::Submenu { id, items, .. } => [vec![(id.as_str(), entry)], flat(items)].concat(),
+                Entry::Separator => vec![],
+            })
+            .collect()
+    }
+
+    fn find<'a>(entries: &'a [Entry], wanted: &str) -> &'a Entry {
+        flat(entries).into_iter().find(|(id, _)| *id == wanted).unwrap_or_else(|| panic!("no {wanted}")).1
+    }
+
+    #[test]
+    fn every_entry_is_listed_once() {
+        let added = [character(1, true), character(2, false)];
+        let entries = menu_entries(Some("3"), &added, &HashSet::new(), false);
+        let all: Vec<&str> = flat(&entries).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(all.len(), all.iter().collect::<HashSet<_>>().len(), "{all:?}");
+        assert_eq!(all.len(), 6 + 2 + 1 + 1 + 2);
+    }
+
+    #[test]
+    fn a_character_that_cannot_be_shown_can_still_be_removed() {
+        let (good, damaged, lost) = (character(1, true), character(2, false), character(3, true));
+        let entries = menu_entries(Some(&good.id), &[good.clone(), damaged.clone(), lost.clone()], &HashSet::from([lost.id.clone()]), false);
+        for piece in [&damaged, &lost] {
+            assert!(matches!(find(&entries, &format!("character-{}", piece.id)), Entry::Check { enabled: false, label, .. } if label.ends_with("(can’t be shown)")));
+            assert!(matches!(find(&entries, &format!("remove-{}", piece.id)), Entry::Item { enabled: true, .. }));
+        }
+        assert!(matches!(find(&entries, &format!("character-{}", good.id)), Entry::Check { enabled: true, checked: true, .. }));
+        assert!(matches!(find(&entries, "remove"), Entry::Submenu { enabled: true, .. }));
+    }
+
+    #[test]
+    fn nothing_changes_while_busy_or_before_the_page_reports() {
+        let added = [character(1, true)];
+        for (shown, busy) in [(Some("3"), true), (None, false)] {
+            let entries = menu_entries(shown, &added, &HashSet::new(), busy);
+            assert!(matches!(find(&entries, "add-character"), Entry::Item { enabled: false, .. }));
+            assert!(matches!(find(&entries, "remove"), Entry::Submenu { enabled: false, .. }));
+        }
+        assert!(matches!(find(&menu_entries(None, &added, &HashSet::new(), false), "spirit-3"), Entry::Check { enabled: false, checked: false, .. }));
+        assert!(matches!(find(&menu_entries(Some("3"), &[], &HashSet::new(), false), "remove"), Entry::Submenu { enabled: false, .. }));
+    }
 }
