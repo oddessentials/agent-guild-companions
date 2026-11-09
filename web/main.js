@@ -388,6 +388,7 @@ let legacy = null;
 let at = 'rest'; // the place it last stood at
 let keepSaved = false; // a saved record this version cannot read stays as it was
 let places = null;
+let clampPlacement = true; // restored places stay on screen; only a new drop may leave them partly off
 let moves = 0;
 let dropping = 0;
 let dropTimer = 0;
@@ -405,6 +406,7 @@ async function drop(move) {
   const shown = await monitors();
   if (move !== dropping) return;
   placement = next;
+  clampPlacement = false;
   places = placesFor(placement, size, REST_DISTANCE, shown, false);
   at = placement.role;
   dropping = 0;
@@ -431,7 +433,7 @@ await win.onMoved(({ payload }) => {
 await win.onScaleChanged(async () => {
   if (!placement) return;
   const shown = await monitors();
-  if (placement && !dropping) places = placesFor(placement, size, REST_DISTANCE, shown, false);
+  if (placement && !dropping) places = placesFor(placement, size, REST_DISTANCE, shown, clampPlacement);
 });
 
 /** Back at the place it last stood, shown wholly on a screen without changing what was saved. */
