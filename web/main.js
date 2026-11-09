@@ -1,11 +1,12 @@
 import * as THREE from './vendor/three.module.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { clone as cloneSkeleton } from './vendor/SkeletonUtils.js';
-import { clipFor, hash, SHOWN_HELPERS, STAGING, WORLDS } from './vendor/model.mjs';
+import { clipFor, hash, SHOWN_HELPERS, STAGING, WORLDS, yardExtras } from './vendor/model.mjs';
+import { loadCharacter } from './characters.js';
 import { placesFor, readPlacement, stepToward } from './places.js';
 import { applyEvent, followManager, placeFor, reactionTo } from './reactions.js';
 
-const { invoke } = window.__TAURI__.core;
+const { convertFileSrc, invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { PhysicalPosition } = window.__TAURI__.dpi;
 const { availableMonitors, getCurrentWindow } = window.__TAURI__.window;
@@ -22,6 +23,7 @@ const FADE = 0.3; // seconds between clips, as in the Yard
 const TURN = 7; // radians a second, as in the Yard
 const SPIRIT = 3; // the bird
 const SPIRIT_KEY = 'spirit';
+const CHARACTER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SPOT_KEY = 'spot'; // where it was last put
 const REST_DISTANCE = 220; // CSS pixels between where it works and where it rests
 const DRAG_SETTLE_MS = 400; // no walking this soon after someone moved the window
@@ -155,31 +157,50 @@ function nextClip() {
   else crossTo(name, THREE.LoopOnce);
 }
 
+const added = (n) => typeof n === 'string';
+const characterUrl = (id) => convertFileSrc(id, 'character');
+
+function dispose(root) {
+  root.traverse((node) => {
+    if (!node.isMesh) return;
+    node.geometry.dispose();
+    for (const material of [node.material].flat()) {
+      for (const value of Object.values(material)) if (value?.isTexture) value.dispose();
+      material.dispose();
+    }
+  });
+}
+
 async function loadSpirit(n) {
   const request = ++spiritRequest;
-  const gltf = await asset(`${GROVE.characters}${n}`);
-  if (request !== spiritRequest) return;
+  const gltf = added(n) ? await loadCharacter(GLTFLoader, characterUrl(n)) : await asset(`${GROVE.characters}${n}`);
+  if (request !== spiritRequest) {
+    if (added(n)) dispose(gltf.scene);
+    return;
+  }
   const heading = character?.heading ?? 0;
   if (character) {
     scene.remove(character.model);
     character.mixer.stopAllAction();
     character.mixer.uncacheRoot(character.model);
+    if (added(character.n)) dispose(character.model);
   }
   const model = cloneSkeleton(gltf.scene);
-  let yard = null;
+  let extras = null;
   model.traverse((node) => {
     if (node.isMesh) node.frustumCulled = false;
-    if (node.userData?.yard) yard = node.userData.yard;
+    if (node.userData?.yard) extras = node.userData.yard;
   });
+  const yard = yardExtras(extras, 'character');
   const mixer = new THREE.AnimationMixer(model);
   const clips = gltf.animations;
-  const height = yard?.height ?? 2;
+  const { height } = yard;
   fitCamera(model, mixer, clips, height);
   mixer.stopAllAction();
   scene.add(model);
   mixer.addEventListener('finished', nextClip);
   // The model's own stride and cycle, so its planted feet do not slide as the window moves.
-  const speed = (yard?.stride ?? 1) / (yard?.cycle ?? 1);
+  const speed = yard.stride / yard.cycle;
   character = { n, model, mixer, clips, action: null, clip: null, clipMode: null, clipCount: 0, height, speed, heading };
   model.rotation.y = heading;
   if (walking) crossTo('walk', THREE.LoopRepeat);
@@ -189,17 +210,31 @@ async function loadSpirit(n) {
 function savedSpirit() {
   try {
     const saved = localStorage.getItem(SPIRIT_KEY);
+    if (CHARACTER_ID.test(saved)) return saved;
     const n = Number(saved);
     return saved !== null && Number.isInteger(n) && n >= 0 && n < 6 ? n : SPIRIT;
   } catch { return SPIRIT; }
 }
+
+const shown = () => invoke('spirit_shown', { id: String(character.n) });
 
 async function chooseSpirit(n) {
   if (n === character?.n) spiritRequest += 1;
   else await loadSpirit(n);
   if (character?.n !== n) return;
   try { localStorage.setItem(SPIRIT_KEY, String(n)); } catch {}
-  invoke('spirit_shown', { n });
+  shown();
+}
+
+function unavailable(n, error) {
+  invoke('report', { message: `spirit: ${error?.message ?? error}` });
+  if (added(n)) invoke('character_unavailable', { id: n, problem: String(error?.message ?? error) });
+}
+
+async function checkCharacter(token) {
+  let problem = null;
+  try { dispose((await loadCharacter(GLTFLoader, characterUrl(`check-${token}`))).scene); } catch (error) { problem = error.message; }
+  await invoke('character_checked', { token, problem });
 }
 
 // Helpers: the Yard's helpers() and helperClip() (renderer.js), round a character that stays put.
@@ -585,7 +620,12 @@ function frame() {
 try {
   reaction = reactionTo([], Date.now());
   step('loading the spirit');
-  await loadSpirit(savedSpirit());
+  const saved = savedSpirit();
+  try { await loadSpirit(saved); } catch (error) {
+    if (!added(saved)) throw error;
+    unavailable(saved, error);
+    await loadSpirit(SPIRIT);
+  }
   step('placing the window');
   await restore();
   await listen('manager', ({ payload }) => {
@@ -601,11 +641,15 @@ try {
   });
   await listen('spirit', ({ payload }) => {
     chooseSpirit(payload).catch((error) => {
-      invoke('report', { message: `spirit: ${error}` });
-      invoke('spirit_shown', { n: character.n });
+      unavailable(payload, error);
+      shown();
     });
   });
-  invoke('spirit_shown', { n: character.n });
+  await listen('check-character', ({ payload }) => checkCharacter(payload));
+  await listen('removed', ({ payload }) => {
+    if (character.n === payload) chooseSpirit(SPIRIT).catch((error) => unavailable(SPIRIT, error));
+  });
+  shown();
   react();
   step('drawing');
   character.mixer.update(0);
