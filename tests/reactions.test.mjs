@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyEvent, mergeSessions, reactionTo } from '../web/reactions.js';
+import { applyEvent, followManager, GRACE_MS, mergeSessions, placeFor, reactionTo } from '../web/reactions.js';
 
 const NOW = Date.parse('2026-11-04T12:00:00.000Z');
 const ago = (ms) => new Date(NOW - ms).toISOString();
@@ -69,5 +69,28 @@ test('events keep the session list', () => {
   assert.equal(sessions.get('a').activity, 'active');
   sessions = applyEvent(sessions, { type: 'session.removed', sessionId: 'b' });
   assert.deepEqual([...sessions.keys()], ['a']);
-  assert.equal(applyEvent(sessions, { type: 'disconnected' }).size, 0);
+  assert.deepEqual([...applyEvent(sessions, { type: 'unreachable' }).keys()], ['a']);
+});
+
+test('it works through work and the pause after it, and rests in rest, when done, and with no manager', () => {
+  assert.deepEqual(['work', 'pause', 'rest', 'done'].map(placeFor), ['work', 'work', 'rest', 'rest']);
+  assert.equal(placeFor(reactionTo([], NOW).mode), 'rest');
+  const ended = [session('a', { status: 'exited', exitedAt: ago(1000), exitCode: 0 })];
+  assert.equal(placeFor(reactionTo(ended, NOW).mode), 'rest');
+  assert.equal(placeFor(reactionTo([session('a', { activity: 'active' }), ...ended.map((s) => ({ ...s, id: 'b' }))], NOW).mode), 'work');
+  assert.equal(placeFor(reactionTo([session('a', { lastOutputAt: ago(1000) })], NOW).mode), 'work');
+});
+
+test('the manager counts as gone only after the grace, however often it fails, and a hello ends the wait', () => {
+  const fresh = { lostSince: null, gone: false };
+  const failAt = (link, ms) => followManager(link, { type: 'unreachable' }, NOW + ms);
+  let link = failAt(fresh, 0);
+  for (let ms = 2000; ms < GRACE_MS; ms += 2000) {
+    link = failAt(link, ms);
+    assert.deepEqual(link, { lostSince: NOW, gone: false });
+  }
+  assert.deepEqual(failAt(link, GRACE_MS), { lostSince: NOW, gone: true });
+  assert.deepEqual(followManager(link, { type: 'hello', sessions: [] }, NOW + 6000), fresh);
+  assert.equal(followManager(link, { type: 'session.updated', session: session('a') }, NOW + 6000), link);
+  assert.deepEqual(failAt(followManager(failAt(fresh, 0), { type: 'hello', sessions: [] }, NOW + 2000), 9000), { lostSince: NOW + 9000, gone: false });
 });
