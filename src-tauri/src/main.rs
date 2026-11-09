@@ -77,16 +77,16 @@ fn refresh_menu(app: &AppHandle) -> tauri::Result<()> {
     if !added.is_empty() {
         menu.append(&PredefinedMenuItem::separator(app)?)?;
     }
+    let label = |character: &characters::Character, lost: bool| if lost { format!("{} (can’t be shown)", character.title) } else { character.title.clone() };
+    let remove = Submenu::with_id(app, "remove", "Remove character", idle && !added.is_empty())?;
     for character in &added {
-        let lost = unavailable.contains(&character.id);
-        let label = if lost { format!("{} (can’t be shown)", character.title) } else { character.title.clone() };
-        menu.append(&CheckMenuItem::with_id(app, format!("character-{}", character.id), label, shown.is_some() && !lost, shown.as_ref() == Some(&character.id), None::<&str>)?)?;
+        let lost = !character.readable || unavailable.contains(&character.id);
+        menu.append(&CheckMenuItem::with_id(app, format!("character-{}", character.id), label(character, lost), shown.is_some() && !lost, shown.as_ref() == Some(&character.id), None::<&str>)?)?;
+        remove.append(&MenuItem::with_id(app, format!("remove-{}", character.id), label(character, lost), true, None::<&str>)?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(app, "add-character", "Add character…", idle, None::<&str>)?)?;
-    let removable = added.iter().find(|character| shown.as_ref() == Some(&character.id));
-    let label = removable.map_or("Remove character".into(), |character| format!("Remove “{}”", character.title));
-    menu.append(&MenuItem::with_id(app, "remove-character", label, idle && removable.is_some(), None::<&str>)?)?;
+    menu.append(&remove)?;
     Ok(())
 }
 
@@ -148,11 +148,10 @@ async fn import(app: &AppHandle, folder: Option<PathBuf>) -> Result<String, Stri
     result
 }
 
-async fn remove_character(app: AppHandle) {
+async fn remove_character(app: AppHandle, id: String) {
     exclusive(&app, async {
         let state = app.state::<Characters>();
-        let shown = state.shown.lock().unwrap().clone();
-        let Some(character) = characters::list_characters(&state.dir).into_iter().find(|character| Some(&character.id) == shown.as_ref()) else { return };
+        let Some(character) = characters::list_characters(&state.dir).into_iter().find(|character| character.id == id) else { return };
         let (answer, confirmed) = oneshot::channel();
         app.dialog()
             .message(format!("Remove “{}” from Grove Companion? The folder you added it from stays as it is.", character.title))
@@ -275,8 +274,8 @@ fn main() {
                         app.exit(0);
                     } else if id == "add-character" {
                         tauri::async_runtime::spawn(add_character(app.clone()));
-                    } else if id == "remove-character" {
-                        tauri::async_runtime::spawn(remove_character(app.clone()));
+                    } else if let Some(character) = id.strip_prefix("remove-").filter(|id| characters::is_id(id)) {
+                        tauri::async_runtime::spawn(remove_character(app.clone(), character.to_string()));
                     } else if let Some(n) = id.strip_prefix("spirit-").and_then(|n| n.parse::<usize>().ok()) {
                         let _ = app.emit("spirit", json!(n));
                     } else if let Some(character) = id.strip_prefix("character-").filter(|id| characters::is_id(id)) {

@@ -73,6 +73,7 @@ fn bad(message: &str) -> String {
 pub struct Character {
     pub id: String,
     pub title: String,
+    pub readable: bool,
 }
 
 pub fn read_manifest(bytes: &[u8]) -> Checked<String> {
@@ -682,7 +683,7 @@ pub fn install(dir: &Path, token: &str) -> io::Result<String> {
 }
 
 pub fn remove(dir: &Path, id: &str) -> io::Result<()> {
-    if !is_id(id) {
+    if !is_id(id) || !fs::symlink_metadata(dir.join(id))?.is_dir() {
         return Err(io::ErrorKind::NotFound.into());
     }
     let aside = dir.join(format!("{REMOVED}{id}"));
@@ -715,7 +716,9 @@ pub fn list_characters(dir: &Path) -> Vec<Character> {
             if !entry.file_type().ok()?.is_dir() {
                 return None;
             }
-            Some(Character { title: installed_title(&entry.path())?, id })
+            let title = installed_title(&entry.path());
+            let readable = title.is_some() && fs::symlink_metadata(entry.path().join(MODEL)).is_ok_and(|m| m.is_file());
+            Some(Character { title: title.unwrap_or_else(|| "Unreadable character".into()), readable, id })
         })
         .collect();
     found.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
@@ -840,7 +843,7 @@ mod tests {
         assert!(model_file(&dir, &format!("/check-{token}"), Some(&token)).is_some());
         assert!(model_file(&dir, &format!("/check-{token}"), Some(&new_id())).is_none(), "only the import being checked is served");
         let id = install(&dir, &token).unwrap();
-        assert_eq!(list_characters(&dir), vec![Character { id: id.clone(), title: "Patchwork".into() }]);
+        assert_eq!(list_characters(&dir), vec![Character { id: id.clone(), title: "Patchwork".into(), readable: true }]);
         assert_eq!(fs::read(model_file(&dir, &format!("/{id}"), None).unwrap()).unwrap(), GOOD);
         assert!(model_file(&dir, &format!("/check-{token}"), Some(&token)).is_none());
     }
@@ -922,6 +925,45 @@ mod tests {
         assert_eq!(list_characters(&dir).iter().map(|c| c.id.clone()).collect::<Vec<_>>(), vec![ids[1].clone()]);
         assert!(model_file(&dir, &ids[0], None).is_none());
         assert!(remove(&dir, "../outside").is_err());
+        assert!(remove(&dir, &new_id()).is_err());
+    }
+
+    #[test]
+    fn a_damaged_character_is_listed_and_can_be_removed() {
+        let dir = store("damaged");
+        let ids: Vec<String> = (0..3)
+            .map(|_| {
+                let token = new_id();
+                stage(&dir, &folder("damaged", MANIFEST_OK, GOOD), &token).unwrap();
+                install(&dir, &token).unwrap()
+            })
+            .collect();
+        fs::write(dir.join(&ids[0]).join(INSTALL), "nope").unwrap();
+        fs::remove_file(dir.join(&ids[1]).join(MODEL)).unwrap();
+        let listed = list_characters(&dir);
+        assert_eq!(listed.len(), 3);
+        assert_eq!(listed.iter().filter(|c| !c.readable).map(|c| c.id.clone()).collect::<HashSet<_>>(), HashSet::from([ids[0].clone(), ids[1].clone()]));
+        assert!(listed.iter().any(|c| c.id == ids[0] && c.title == "Unreadable character"));
+        for id in &ids[..2] {
+            remove(&dir, id).unwrap();
+        }
+        assert_eq!(list_characters(&dir).iter().map(|c| c.id.clone()).collect::<Vec<_>>(), vec![ids[2].clone()]);
+    }
+
+    #[test]
+    fn removal_never_follows_a_link_out_of_the_store() {
+        let dir = store("linked");
+        let outside = folder("outside", MANIFEST_OK, GOOD);
+        let id = new_id();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&*outside, dir.join(&id));
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&*outside, dir.join(&id));
+        if linked.is_ok() {
+            assert!(remove(&dir, &id).is_err());
+            assert!(outside.join(MODEL).is_file(), "the linked folder's files are untouched");
+            assert!(list_characters(&dir).is_empty(), "a linked folder is not offered as a character");
+        }
     }
 
     #[test]
