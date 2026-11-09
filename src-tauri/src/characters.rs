@@ -12,6 +12,7 @@ use std::{
 
 pub const MODEL: &str = "character.glb";
 const MANIFEST: &str = "piece.json";
+const INSTALL: &str = "install.json";
 const STAGING: &str = ".staging-";
 const REMOVED: &str = ".removed-";
 const CHECK: &str = "check-";
@@ -660,7 +661,8 @@ pub fn stage(dir: &Path, folder: &Path, token: &str) -> Checked<String> {
     fs::create_dir_all(dir).map_err(unwritable)?;
     let written = fs::create_dir(&target)
         .and_then(|_| fs::write(target.join(MANIFEST), &manifest))
-        .and_then(|_| fs::write(target.join(MODEL), &model));
+        .and_then(|_| fs::write(target.join(MODEL), &model))
+        .and_then(|_| fs::write(target.join(INSTALL), serde_json::json!({ "title": title }).to_string()));
     if let Err(err) = written {
         discard(dir, token);
         return Err(unwritable(err));
@@ -698,6 +700,11 @@ pub fn sweep(dir: &Path) {
     }
 }
 
+fn installed_title(folder: &Path) -> Option<String> {
+    let install: Value = serde_json::from_slice(&fs::read(folder.join(INSTALL)).ok()?).ok()?;
+    install.get("title")?.as_str().filter(|title| !title.trim().is_empty()).map(str::to_string)
+}
+
 pub fn list_characters(dir: &Path) -> Vec<Character> {
     let mut found: Vec<Character> = fs::read_dir(dir)
         .into_iter()
@@ -708,8 +715,7 @@ pub fn list_characters(dir: &Path) -> Vec<Character> {
             if !entry.file_type().ok()?.is_dir() {
                 return None;
             }
-            let title = read_manifest(&fs::read(entry.path().join(MANIFEST)).ok()?).ok()?;
-            Some(Character { title: if title.is_empty() { "Character".into() } else { title }, id })
+            Some(Character { title: installed_title(&entry.path())?, id })
         })
         .collect();
     found.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
@@ -868,6 +874,28 @@ mod tests {
         fs::create_dir(source.join(MODEL)).unwrap();
         assert_eq!(stage(&dir, &source, &new_id()), Err("character.glb isn’t a plain file.".into()));
         assert_eq!(stage(&dir, &source.join("nowhere"), &new_id()), Err("Choose a piece folder.".into()));
+    }
+
+    #[test]
+    fn an_untitled_character_keeps_the_name_of_the_folder_it_came_from() {
+        let dir = store("untitled");
+        let parent = store("sources");
+        let ids: Vec<String> = ["Patchwork", "Lantern Keeper"]
+            .iter()
+            .map(|name| {
+                let source = parent.join(name);
+                fs::create_dir(&source).unwrap();
+                fs::write(source.join(MANIFEST), r#"{"format":1,"kind":"character","title":"  "}"#).unwrap();
+                fs::write(source.join(MODEL), GOOD).unwrap();
+                let token = new_id();
+                assert_eq!(stage(&dir, &source, &token), Ok(name.to_string()));
+                install(&dir, &token).unwrap()
+            })
+            .collect();
+        let titles: Vec<String> = list_characters(&dir).into_iter().map(|c| c.title).collect();
+        assert_eq!(titles, vec!["Lantern Keeper", "Patchwork"]);
+        fs::write(dir.join(&ids[0]).join(MANIFEST), r#"{"format":1,"kind":"character","title":"Renamed"}"#).unwrap();
+        assert!(list_characters(&dir).iter().any(|c| c.title == "Patchwork"), "install.json alone names an installed character");
     }
 
     #[test]
