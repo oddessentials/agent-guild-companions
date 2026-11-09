@@ -1,5 +1,4 @@
-// What the one character should do. Every decision is the Yard's (vendor/model.mjs, copied unchanged);
-// the only thing added here is folding all of the manager's sessions into the one session it stages.
+// What the one character should do. Every decision is the Yard's (vendor/model.mjs, copied unchanged).
 import { familiarPose, marksFor, nextStagingChange, stagingMode } from './vendor/model.mjs';
 
 // Same id every time, so the character keeps one clip sequence however sessions come and go.
