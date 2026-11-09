@@ -72,6 +72,7 @@ const asset = (name) => {
 
 let character = null; // { n, model, mixer, clips, action, clip, height, speed, heading }
 let spiritRequest = 0;
+let loading = null;
 let fit = null; // what fitCamera last framed, to frame it again if the window changes size
 
 /** Frames every clip's sampled poses, the ring of helpers and the marks above, so nothing is cut off. */
@@ -162,7 +163,16 @@ const characterUrl = (id) => convertFileSrc(id, 'character');
 
 async function loadSpirit(n) {
   const request = ++spiritRequest;
-  const gltf = added(n) ? await loadCharacter(GLTFLoader, characterUrl(n)) : await asset(`${GROVE.characters}${n}`);
+  loading = n;
+  let gltf;
+  try {
+    gltf = added(n) ? await loadCharacter(GLTFLoader, characterUrl(n)) : await asset(`${GROVE.characters}${n}`);
+  } catch (error) {
+    if (request !== spiritRequest) return;
+    throw error;
+  } finally {
+    if (request === spiritRequest) loading = null;
+  }
   if (request !== spiritRequest) {
     if (added(n)) release(gltf.scene, [character?.model]);
     return;
@@ -636,6 +646,10 @@ try {
   });
   await listen('check-character', ({ payload }) => checkCharacter(payload));
   await listen('removed', ({ payload }) => {
+    if (loading === payload) {
+      spiritRequest += 1;
+      loading = null;
+    }
     if (character.n === payload) chooseSpirit(SPIRIT).catch((error) => unavailable(SPIRIT, error));
   });
   shown();

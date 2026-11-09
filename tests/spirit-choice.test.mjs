@@ -83,3 +83,36 @@ test('every added character that is checked, outrun or replaced releases its ima
   assert.ok(bitmaps.slice(from).filter((bitmap) => bitmap.source === 'bundled').every((bitmap) => !bitmap.closed));
   assert.ok(bitmaps.slice(from).every((bitmap) => bitmap.closed <= 1), 'nothing is closed twice');
 });
+
+test('a character removed while it loads is never shown or saved, and its images are released', async () => {
+  const from = bitmaps.length;
+  const app = await companion({ spirit: '2', models: { [url(ID)]: 'character' } });
+  const choosing = app.emit('spirit', ID);
+  await app.emit('removed', ID);
+  await choosing;
+  assert.ok(!commands(app, 'spirit_shown').some(({ id }) => id === ID));
+  assert.equal(shownAs(app), '2');
+  assert.equal(app.stored('spirit'), '2');
+  const decoded = bitmaps.slice(from).filter((bitmap) => bitmap.source === 'added');
+  assert.ok(decoded.length > 0 && decoded.every((bitmap) => bitmap.closed === 1));
+});
+
+test('removing another character does not interrupt a selection that is loading', async () => {
+  const app = await companion({ spirit: '2', models: { [url(ID)]: 'character' } });
+  const choosing = app.emit('spirit', ID);
+  await app.emit('removed', OTHER);
+  await choosing;
+  assert.equal(shownAs(app), ID);
+  assert.equal(app.stored('spirit'), ID);
+});
+
+test('a stale load that fails says nothing about the character it was loading', async () => {
+  const app = await companion({ spirit: '2' });
+  const choosing = app.emit('spirit', ID);
+  await app.emit('removed', ID);
+  await choosing;
+  assert.deepEqual(commands(app, 'character_unavailable'), []);
+  assert.ok(!app.reports.some((message) => message.startsWith('spirit: ')));
+  assert.equal(shownAs(app), '2');
+  assert.equal(app.stored('spirit'), '2');
+});
