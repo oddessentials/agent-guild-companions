@@ -4,6 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') {
+  console.error('site_check installs, uninstalls and deletes Grove Companion data, so it runs only on a GitHub-hosted Actions runner.');
+  process.exit(1);
+}
+
 const windows = process.platform === 'win32';
 const lang = windows ? 'powershell' : 'sh';
 const page = readFileSync(new URL('../site/index.md', import.meta.url), 'utf8');
