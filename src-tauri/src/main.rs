@@ -40,6 +40,7 @@ fn report(message: String) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         .invoke_handler(tauri::generate_handler![connect_manager, spirit_shown, report])
         .setup(|app| {
             // A desktop companion, not an app to switch to: no Dock icon.
