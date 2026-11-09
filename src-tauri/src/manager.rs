@@ -65,13 +65,11 @@ fn event_for_page(message: &Value) -> Option<Value> {
     }
 }
 
-/// Keeps a connection open for as long as the app runs. A stopped manager reads as no sessions.
+/// Keeps a connection open for as long as the app runs, and tells the page each time it cannot.
 pub async fn follow(app: AppHandle) {
-    let mut connected = false;
     loop {
         if let Some(request) = request() {
             if let Ok((mut socket, _)) = connect_async(request).await {
-                connected = true;
                 eprintln!("manager: connected");
                 // Reading answers the manager's heartbeat pings.
                 while let Some(Ok(frame)) = socket.next().await {
@@ -81,13 +79,10 @@ pub async fn follow(app: AppHandle) {
                         let _ = app.emit("manager", event);
                     }
                 }
+                eprintln!("manager: disconnected");
             }
         }
-        if connected {
-            connected = false;
-            eprintln!("manager: disconnected");
-            let _ = app.emit("manager", json!({ "type": "disconnected" }));
-        }
+        let _ = app.emit("manager", json!({ "type": "unreachable" }));
         tokio::time::sleep(RETRY).await;
     }
 }

@@ -59,10 +59,22 @@ export function reactionTo(sessions, now) {
   };
 }
 
+/** Where the character belongs in each mode: it works through the Yard's pause, and rests once nothing is running. */
+export const placeFor = (mode) => (mode === 'work' || mode === 'pause' ? 'work' : 'rest');
+
+export const GRACE_MS = 10000;
+
+/** The link to the manager, from its hello and the native side's failed attempts: gone only after a grace. */
+export function followManager(link, event, now) {
+  if (event.type === 'hello') return { lostSince: null, gone: false };
+  if (event.type !== 'unreachable') return link;
+  const lostSince = link.lostSince ?? now;
+  return { lostSince, gone: now - lostSince >= GRACE_MS };
+}
+
 /** The manager's event stream, kept as the session list it describes. */
 export function applyEvent(sessions, event) {
   if (event.type === 'hello') return new Map(event.sessions.map((session) => [session.id, session]));
-  if (event.type === 'disconnected') return new Map();
   const next = new Map(sessions);
   if (event.type === 'session.created' || event.type === 'session.updated') next.set(event.session.id, event.session);
   if (event.type === 'session.removed') next.delete(event.sessionId);

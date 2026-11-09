@@ -2,13 +2,13 @@ import * as THREE from './vendor/three.module.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { clone as cloneSkeleton } from './vendor/SkeletonUtils.js';
 import { clipFor, hash, SHOWN_HELPERS, STAGING, WORLDS } from './vendor/model.mjs';
-import { isOnScreen, placesFrom, stepToward } from './places.js';
-import { applyEvent, reactionTo } from './reactions.js';
+import { placesFor, readPlacement, stepToward } from './places.js';
+import { applyEvent, followManager, placeFor, reactionTo } from './reactions.js';
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { PhysicalPosition } = window.__TAURI__.dpi;
-const { availableMonitors, getCurrentWindow, currentMonitor } = window.__TAURI__.window;
+const { availableMonitors, getCurrentWindow } = window.__TAURI__.window;
 const win = getCurrentWindow();
 const step = (message) => invoke('report', { message: `start: ${message}` });
 step('script loaded');
@@ -346,6 +346,8 @@ function stepMarks(dt) {
 
 // The manager's events, from the native side, which holds the token and the connection.
 let sessions = new Map();
+let link = { lostSince: null, gone: false };
+let known = false;
 let reaction = null;
 let walking = false;
 let changeTimer = 0;
@@ -380,45 +382,86 @@ function setIgnoring(value) {
 // station and plaza. pos is exact; the window only goes to whole pixels, sent is where it was last told.
 let pos = { x: origin.x, y: origin.y };
 let sent = { x: origin.x, y: origin.y };
+const size = { width: window.innerWidth, height: window.innerHeight };
+let placement = null; // { x, y, role }: where it was put, and as which place; only a drop changes it
+let legacy = null;
+let at = 'rest'; // the place it last stood at
+let keepSaved = false; // a saved record this version cannot read stays as it was
 let places = null;
-let draggedAt = -Infinity;
-let monitor = await currentMonitor();
+let moves = 0;
+let dropping = 0;
+let dropTimer = 0;
 
-const workArea = () => monitor?.workArea
-  ?? { position: { x: 0, y: 0 }, size: { width: screen.width * window.devicePixelRatio, height: screen.height * window.devicePixelRatio } };
+const monitors = () => availableMonitors().catch(() => []);
+const slot = () => (known ? placeFor(reaction.mode) : at);
 
-function placeHere() {
-  places = placesFrom(Math.round(pos.x), reaction.mode, REST_DISTANCE * window.devicePixelRatio, gl.drawingBufferWidth, workArea());
+function save() {
+  if (keepSaved) return;
+  try { localStorage.setItem(SPOT_KEY, JSON.stringify({ v: 2, ...placement, at })); } catch { /* it just won't be remembered */ }
+}
+
+async function drop(move) {
+  const next = { x: pos.x, y: pos.y, role: slot() };
+  const shown = await monitors();
+  if (move !== dropping) return;
+  placement = next;
+  places = placesFor(placement, size, REST_DISTANCE, shown, false);
+  at = placement.role;
+  dropping = 0;
+  save();
 }
 
 await win.onMoved(({ payload }) => {
   const off = Math.hypot(payload.x - sent.x, payload.y - sent.y);
   if (off <= (walking ? WALK_ECHO : 0)) return;
   // Not our own walk, so someone moved it: where it was put is now its place.
-  draggedAt = performance.now();
   pos = { x: payload.x, y: payload.y };
   sent = { x: payload.x, y: payload.y };
-  try { localStorage.setItem(SPOT_KEY, JSON.stringify(sent)); } catch { /* it just won't be remembered */ }
   if (walking) {
     walking = false;
     character.clip = null;
     playMode();
   }
-  placeHere();
-  currentMonitor().then((current) => { monitor = current; }).catch(() => {});
+  const move = ++moves;
+  dropping = move;
+  clearTimeout(dropTimer);
+  dropTimer = setTimeout(() => drop(move), DRAG_SETTLE_MS);
 });
 
-/** Back where it was last put, if that spot is still on a screen. */
-async function restoreSpot() {
-  let spot = null;
-  try { spot = JSON.parse(localStorage.getItem(SPOT_KEY)); } catch { return; }
-  if (!Number.isInteger(spot?.x) || !Number.isInteger(spot?.y)) return;
-  const areas = (await availableMonitors()).map((each) => each.workArea);
-  if (!isOnScreen(spot, gl.drawingBufferWidth, gl.drawingBufferHeight, areas)) return;
-  pos = { x: spot.x, y: spot.y };
-  sent = { x: spot.x, y: spot.y };
+await win.onScaleChanged(async () => {
+  if (!placement) return;
+  const shown = await monitors();
+  if (placement && !dropping) places = placesFor(placement, size, REST_DISTANCE, shown, false);
+});
+
+/** Back at the place it last stood, shown wholly on a screen without changing what was saved. */
+async function restore() {
+  let saved;
+  try { saved = readPlacement(localStorage.getItem(SPOT_KEY)); } catch { saved = { unknown: true }; }
+  if (saved?.unknown) keepSaved = true;
+  if (!saved?.placement && !saved?.legacy) return;
+  const shownAt = placesFor(saved.placement ?? { ...saved.legacy, role: 'work' }, size, REST_DISTANCE, await monitors(), true);
+  if (saved.placement) {
+    ({ placement, at } = saved);
+    places = shownAt;
+  } else legacy = saved.legacy;
+  const spot = { x: shownAt[saved.placement ? at : 'work'], y: shownAt.y };
+  pos = { ...spot };
+  sent = { ...spot };
   await win.setPosition(new PhysicalPosition(spot.x, spot.y));
-  monitor = await currentMonitor();
+}
+
+async function heard() {
+  if (known) return;
+  known = true;
+  if (placement || dropping) return;
+  const next = { ...(legacy ?? { x: pos.x, y: pos.y }), role: slot() };
+  const shown = await monitors();
+  if (placement || dropping) return;
+  placement = next;
+  places = placesFor(placement, size, REST_DISTANCE, shown, true);
+  at = placement.role;
+  save();
 }
 
 const angleTo = (from, to) => {
@@ -435,9 +478,10 @@ const turnToward = (from, to, dt) => {
 // The Yard's advance and its helpers' trailing (renderer.js).
 function advance(dt) {
   if (!character || !places) return;
-  const target = reaction.mode === 'rest' ? places.rest : places.home;
+  const place = slot();
+  const target = places[place];
   let moved = 0; // metres the character covered this frame
-  if (pos.x !== target && performance.now() - draggedAt >= DRAG_SETTLE_MS) {
+  if (!dropping && pos.x !== target) {
     if (!walking) {
       walking = true;
       crossTo('walk', THREE.LoopRepeat);
@@ -457,7 +501,11 @@ function advance(dt) {
       playMode();
     }
   }
-  let want = reaction.mode === 'rest' ? 0 : STAGING.stationFace;
+  if (!walking && !dropping && pos.x === target && at !== place) {
+    at = place;
+    save();
+  }
+  let want = place === 'rest' ? 0 : STAGING.stationFace;
   // Straight along the screen, the way the window goes, which the camera's angle turns a little from world X.
   if (walking) want = Math.atan2(Math.sign(target - pos.x) * screenRight.x, Math.sign(target - pos.x) * screenRight.z);
   character.heading = turnToward(character.heading, want, dt);
@@ -537,17 +585,17 @@ try {
   step('loading the spirit');
   await loadSpirit(savedSpirit());
   step('placing the window');
-  await restoreSpot();
-  placeHere();
-  let greeted = false;
+  await restore();
   await listen('manager', ({ payload }) => {
-    sessions = applyEvent(sessions, payload);
+    const wasGone = link.gone;
+    link = followManager(link, payload, Date.now());
+    if (payload.type === 'unreachable') {
+      if (!link.gone || wasGone) return;
+      sessions = new Map();
+      invoke('report', { message: 'manager: gone' });
+    } else sessions = applyEvent(sessions, payload);
     react();
-    // As the Yard's characters do when a page opens: appear at the place, without walking there.
-    if (payload.type === 'hello' && !greeted) {
-      greeted = true;
-      placeHere();
-    }
+    if (payload.type === 'hello' || link.gone) heard();
   });
   await listen('spirit', ({ payload }) => {
     chooseSpirit(payload).catch((error) => {
