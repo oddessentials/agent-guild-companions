@@ -3,10 +3,12 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { VectorKeyframeTrack } from '../web/vendor/three.module.js';
 import { GLTFLoader } from '../web/vendor/GLTFLoader.js';
-import { characterProblem, loadCharacter } from '../web/characters.js';
+import { characterProblem, loadCharacter, release } from '../web/characters.js';
+import { clone } from '../web/vendor/SkeletonUtils.js';
 
 globalThis.self ??= globalThis;
-globalThis.createImageBitmap ??= async () => ({ width: 1, height: 1, close() {} });
+const bitmaps = [];
+globalThis.createImageBitmap = async () => { const bitmap = { width: 1, height: 1, closed: 0, close() { this.closed += 1; } }; bitmaps.push(bitmap); return bitmap; };
 const bytes = (name) => {
   const b = readFileSync(new URL(`./fixtures/characters/${name}.glb`, import.meta.url));
   return b.buffer.slice(b.byteOffset, b.byteOffset + b.length);
@@ -35,4 +37,25 @@ test('loading refuses a model it cannot read and leaves nothing half-loaded', as
   assert.equal(characterProblem(await loadCharacter(Loader, 'character')), null);
   await assert.rejects(loadCharacter(Loader, 'truncated'), /character.glb is damaged and can’t be drawn./);
   await assert.rejects(loadCharacter(Loader, 'missing_bone'), /has no LeftFoot bone/);
+});
+
+test('a released character closes each image it decoded, once, and keeps what a live copy still uses', async () => {
+  const from = bitmaps.length;
+  const gltf = await parse('character');
+  const decoded = bitmaps.slice(from);
+  assert.ok(decoded.length > 0, 'the fixture decodes an image');
+  const live = clone(gltf.scene);
+  release(gltf.scene, [live]);
+  assert.deepEqual(decoded.map((bitmap) => bitmap.closed), decoded.map(() => 0));
+  release(live);
+  assert.deepEqual(decoded.map((bitmap) => bitmap.closed), decoded.map(() => 1));
+});
+
+test('a model refused by the draw check is released', async () => {
+  class Loader extends GLTFLoader { loadAsync(url) { return this.parseAsync(bytes(url), ''); } }
+  const from = bitmaps.length;
+  await assert.rejects(loadCharacter(Loader, 'missing_bone'));
+  const decoded = bitmaps.slice(from);
+  assert.ok(decoded.length > 0);
+  assert.ok(decoded.every((bitmap) => bitmap.closed === 1));
 });

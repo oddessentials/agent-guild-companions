@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { clone as cloneSkeleton } from './vendor/SkeletonUtils.js';
 import { clipFor, hash, SHOWN_HELPERS, STAGING, WORLDS, yardExtras } from './vendor/model.mjs';
-import { loadCharacter } from './characters.js';
+import { loadCharacter, release } from './characters.js';
 import { placesFor, readPlacement, stepToward } from './places.js';
 import { applyEvent, followManager, placeFor, reactionTo } from './reactions.js';
 
@@ -160,22 +160,11 @@ function nextClip() {
 const added = (n) => typeof n === 'string';
 const characterUrl = (id) => convertFileSrc(id, 'character');
 
-function dispose(root) {
-  root.traverse((node) => {
-    if (!node.isMesh) return;
-    node.geometry.dispose();
-    for (const material of [node.material].flat()) {
-      for (const value of Object.values(material)) if (value?.isTexture) value.dispose();
-      material.dispose();
-    }
-  });
-}
-
 async function loadSpirit(n) {
   const request = ++spiritRequest;
   const gltf = added(n) ? await loadCharacter(GLTFLoader, characterUrl(n)) : await asset(`${GROVE.characters}${n}`);
   if (request !== spiritRequest) {
-    if (added(n)) dispose(gltf.scene);
+    if (added(n)) release(gltf.scene, [character?.model]);
     return;
   }
   const heading = character?.heading ?? 0;
@@ -183,7 +172,7 @@ async function loadSpirit(n) {
     scene.remove(character.model);
     character.mixer.stopAllAction();
     character.mixer.uncacheRoot(character.model);
-    if (added(character.n)) dispose(character.model);
+    if (added(character.n)) release(character.model, [gltf.scene]);
   }
   const model = cloneSkeleton(gltf.scene);
   let extras = null;
@@ -233,7 +222,7 @@ function unavailable(n, error) {
 
 async function checkCharacter(token) {
   let problem = null;
-  try { dispose((await loadCharacter(GLTFLoader, characterUrl(`check-${token}`))).scene); } catch (error) { problem = error.message; }
+  try { release((await loadCharacter(GLTFLoader, characterUrl(`check-${token}`))).scene, [character?.model]); } catch (error) { problem = error.message; }
   await invoke('character_checked', { token, problem });
 }
 

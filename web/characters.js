@@ -73,6 +73,35 @@ export function characterProblem({ scene, animations }) {
   return problem ? `${NAME} ${problem}` : null;
 }
 
+function resources(root, into) {
+  root?.traverse((node) => {
+    if (node.skeleton) into.add(node.skeleton);
+    if (!node.isMesh) return;
+    into.add(node.geometry);
+    for (const material of [node.material].flat()) {
+      into.add(material);
+      for (const value of Object.values(material)) {
+        if (!value?.isTexture) continue;
+        into.add(value);
+        const image = value.source?.data ?? value.image;
+        if (typeof image?.close === 'function') into.add(image);
+      }
+    }
+  });
+  return into;
+}
+
+/** Frees what an added character's model holds, decoded images included, except what a model in `keep` still uses. */
+export function release(root, keep = []) {
+  const kept = new Set();
+  for (const live of keep) resources(live, kept);
+  for (const item of resources(root, new Set())) {
+    if (kept.has(item)) continue;
+    if (typeof item.dispose === 'function') item.dispose();
+    else item.close();
+  }
+}
+
 export async function loadCharacter(Loader, url) {
   const failed = [];
   const manager = new THREE.LoadingManager();
@@ -80,6 +109,9 @@ export async function loadCharacter(Loader, url) {
   let gltf;
   try { gltf = await new Loader(manager).loadAsync(url); } catch { throw new Error(`${NAME} is damaged and can’t be drawn.`); }
   const problem = failed.length ? `${NAME} has an image that is incomplete or damaged.` : characterProblem(gltf);
-  if (problem) throw new Error(problem);
+  if (problem) {
+    release(gltf.scene);
+    throw new Error(problem);
+  }
   return gltf;
 }

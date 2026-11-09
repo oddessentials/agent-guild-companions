@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { companion } from './support/companion.mjs';
+import { bitmaps, companion } from './support/companion.mjs';
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const OTHER = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
@@ -62,4 +62,24 @@ test('removing the character on show brings back the bird; removing another chan
   await app.emit('removed', ID);
   assert.equal(shownAs(app), '3');
   assert.equal(app.stored('spirit'), '3');
+});
+
+test('every added character that is checked, outrun or replaced releases its images; bundled spirits keep theirs', async () => {
+  const from = bitmaps.length;
+  const app = await companion({ spirit: ID, models: { [url(ID)]: 'character', [url(OTHER)]: 'character', [url(`check-${TOKEN}`)]: 'character' } });
+  const open = () => bitmaps.slice(from).filter((bitmap) => bitmap.source === 'added' && !bitmap.closed).length;
+  const shownImages = open();
+  assert.ok(shownImages > 0, 'the character on show holds its images');
+  await app.emit('check-character', TOKEN);
+  assert.equal(open(), shownImages, 'a checked import releases its own copy and not the one on show');
+  const outrun = app.emit('spirit', OTHER);
+  await app.emit('spirit', 2);
+  await outrun;
+  assert.equal(shownImages, bitmaps.slice(from).filter((bitmap) => bitmap.source === 'added').length / 3, 'three copies were decoded');
+  assert.equal(open(), 0, 'the outrun load and the replaced character are released');
+  assert.equal(shownAs(app), '2');
+  assert.ok(!commands(app, 'spirit_shown').some(({ id }) => id === OTHER), 'the outrun character was never shown');
+  await app.emit('spirit', 1);
+  assert.ok(bitmaps.slice(from).filter((bitmap) => bitmap.source === 'bundled').every((bitmap) => !bitmap.closed));
+  assert.ok(bitmaps.slice(from).every((bitmap) => bitmap.closed <= 1), 'nothing is closed twice');
 });

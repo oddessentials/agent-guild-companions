@@ -11,7 +11,9 @@ import { GLTFLoader } from '../../web/vendor/GLTFLoader.js';
 import { clone } from '../../web/vendor/SkeletonUtils.js';
 
 globalThis.self ??= globalThis;
-globalThis.createImageBitmap ??= async () => ({ width: 1, height: 1, close() {} });
+export const bitmaps = [];
+const bitmap = (source) => { const made = { source, width: 1, height: 1, closed: 0, close() { this.closed += 1; } }; bitmaps.push(made); return made; };
+globalThis.createImageBitmap = async () => bitmap('added');
 const fixture = (name) => {
   const b = readFileSync(new URL(`../fixtures/characters/${name}.glb`, import.meta.url));
   return b.buffer.slice(b.byteOffset, b.byteOffset + b.length);
@@ -54,7 +56,8 @@ export async function companion({ saved = null, spirit = null, models = {}, moni
     async loadAsync(url) {
       if (Object.hasOwn(models, url)) return new GLTFLoader().parseAsync(fixture(models[url]), '');
       if (url.startsWith('character://')) throw new Error(`404 ${url}`);
-      return { scene: new THREE.Group(), animations: [new THREE.AnimationClip('idle', 1, [])] };
+      const scene = new THREE.Group().add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial({ map: new THREE.Texture(bitmap('bundled')) })));
+      return { scene, animations: [new THREE.AnimationClip('idle', 1, [])] };
     }
   }
   class TestDate extends Date {
