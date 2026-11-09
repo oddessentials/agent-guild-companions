@@ -8,13 +8,12 @@ import { applyEvent, reactionTo } from './reactions.js';
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { PhysicalPosition } = window.__TAURI__.dpi;
-const { availableMonitors, getCurrentWindow, cursorPosition, currentMonitor } = window.__TAURI__.window;
+const { availableMonitors, getCurrentWindow, currentMonitor } = window.__TAURI__.window;
 const win = getCurrentWindow();
 const step = (message) => invoke('report', { message: `start: ${message}` });
 step('script loaded');
 
 const FPS = 30;
-const HIT_POLL_MS = 100; // how often the pixel under the cursor decides click-through
 const HIT_ALPHA = 32; // of 255: anything fainter than this is not the character
 const HIT_RADIUS = 2; // pixels round the cursor, so the outline is not a one-pixel target
 const FIT_SAMPLES = 4; // poses sampled from each clip to fit the camera
@@ -365,7 +364,7 @@ function react() {
 // A window that ignores the cursor gets no mouse events, so the cursor is polled instead, and the
 // pixel under it read back straight after a render, while the drawing buffer still holds it.
 step('reading the window');
-let origin = await win.outerPosition();
+const origin = await win.outerPosition();
 let ignoring = false;
 let dragging = false;
 let probe = null; // cursor position in window pixels, waiting for the next render
@@ -393,7 +392,6 @@ function placeHere() {
 }
 
 await win.onMoved(({ payload }) => {
-  origin = payload;
   const off = Math.hypot(payload.x - sent.x, payload.y - sent.y);
   if (off <= (walking ? WALK_ECHO : 0)) return;
   // Not our own walk, so someone moved it: where it was put is now its place.
@@ -419,7 +417,6 @@ async function restoreSpot() {
   if (!isOnScreen(spot, gl.drawingBufferWidth, gl.drawingBufferHeight, areas)) return;
   pos = { x: spot.x, y: spot.y };
   sent = { x: spot.x, y: spot.y };
-  origin = { x: spot.x, y: spot.y };
   await win.setPosition(new PhysicalPosition(spot.x, spot.y));
   monitor = await currentMonitor();
 }
@@ -485,14 +482,14 @@ function advance(dt) {
   }
 }
 
-setInterval(async () => {
+setIgnoring(true);
+await listen('cursor', ({ payload }) => {
   if (dragging) return;
-  const cursor = await cursorPosition();
-  const x = cursor.x - origin.x;
-  const y = cursor.y - origin.y;
-  if (x < 0 || y < 0 || x >= gl.drawingBufferWidth || y >= gl.drawingBufferHeight) setIgnoring(true);
-  else probe = { x, y };
-}, HIT_POLL_MS);
+  if (!payload || payload.x >= gl.drawingBufferWidth || payload.y >= gl.drawingBufferHeight) {
+    probe = null;
+    setIgnoring(true);
+  } else probe = { x: payload.x, y: payload.y };
+});
 
 function readProbe() {
   const { x, y } = probe;
@@ -524,11 +521,9 @@ function render() {
 }
 
 const clock = new THREE.Clock();
-let last = 0;
-function frame(now) {
-  requestAnimationFrame(frame);
-  if (now - last < 1000 / FPS - 1) return;
-  last = now;
+function frame() {
+  setTimeout(frame, 1000 / FPS);
+  if (document.hidden) return;
   const dt = clock.getDelta();
   advance(dt);
   character?.mixer.update(dt);
@@ -567,7 +562,7 @@ try {
   render();
   step('showing the window');
   await win.show();
-  requestAnimationFrame(frame);
+  frame();
   await invoke('connect_manager');
   invoke('report', { message: `ready: ${gl.getParameter(gl.VERSION)}` });
 } catch (error) {
