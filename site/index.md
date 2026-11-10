@@ -15,9 +15,11 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $setup = Join-Path $env:TEMP 'Grove-Companion-windows-setup.exe'
 Invoke-WebRequest 'https://github.com/oddessentials/agent-guild-companions/releases/latest/download/Grove-Companion-windows-setup.exe' -OutFile $setup
-$run = Start-Process -FilePath $setup -ArgumentList '/S', '/R' -Wait -PassThru
+$run = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
 Remove-Item -LiteralPath $setup
 if ($run.ExitCode -ne 0) { throw "The installer failed (exit $($run.ExitCode))." }
+$dir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Grove Companion').InstallLocation.Trim('"')
+Start-Process -FilePath (Join-Path $dir 'agent-guild-companions.exe')
 'Installed.'
 ```
 
