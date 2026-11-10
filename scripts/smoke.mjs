@@ -1,9 +1,9 @@
-// Starts the built app on a clean machine and checks that it draws its first frame and keeps running.
+// Starts the built app with a profile of its own and checks that it draws its first frame and keeps running.
 // With no manager to find, it should simply rest. A screenshot goes beside it for a person to look at.
 //   node scripts/smoke.mjs <app executable> <screenshot.png>
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,12 +18,16 @@ const STEP_SECONDS = 20;
 
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 const home = mkdtempSync(path.join(tmpdir(), 'companion-smoke-'));
+const profile = mkdtempSync(path.join(tmpdir(), 'companion-profile-'));
+const data = path.join(profile, 'data');
+const pages = process.platform === 'win32' ? path.join(profile, 'webview') : path.join(profile, 'Library', 'WebKit');
+const env = { ...process.env, AGENT_GUILD_HOME: home, GROVE_COMPANION_HOME: data, CFFIXED_USER_HOME: profile, WEBVIEW2_USER_DATA_FOLDER: pages };
 const apps = [];
 let manager = null;
 
 function start(name) {
   const app = { name, log: '', exited: null };
-  app.child = spawn(executable, [], { env: { ...process.env, AGENT_GUILD_HOME: home }, stdio: ['ignore', 'ignore', 'pipe'] });
+  app.child = spawn(executable, [], { env, stdio: ['ignore', 'ignore', 'pipe'] });
   app.child.stderr.on('data', (chunk) => { app.log += chunk; });
   app.child.on('exit', (code, signal) => { app.exited = { code, signal }; });
   app.child.on('error', (error) => { app.exited = { error: String(error) }; });
@@ -50,7 +54,13 @@ async function cleanUp() {
   const deadline = Date.now() + STEP_SECONDS * 1000;
   while (apps.some((app) => !app.exited) && Date.now() < deadline) await sleep(100);
   await manager?.close();
-  rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  for (const dir of [home, profile]) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (error) {
+      console.log(`::warning::${dir} was not removed: ${error.message}`);
+    }
+  }
 }
 
 async function fail(message) {
@@ -120,6 +130,21 @@ async function fakeManager(token) {
   return fake;
 }
 
+/** A command as the setup page runs it: through PowerShell on Windows, where the app has no console of its own. */
+function command(...args) {
+  const quoted = [executable, ...args].map((arg) => `'${arg.replaceAll("'", "''")}'`).join(' ');
+  const script = `try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}; & ${quoted} | Write-Output; exit $LASTEXITCODE`;
+  const result = process.platform === 'win32'
+    ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env, encoding: 'utf8' })
+    : spawnSync(executable, args, { env, encoding: 'utf8' });
+  return `${result.status}: ${String(result.stdout).trim()}${result.error ? ` (${result.error})` : ''}`;
+}
+
+async function says(expected, ...args) {
+  const said = command(...args);
+  if (said !== expected) await fail(`"${args.join(' ')}" should say "${expected}", not "${said}".`);
+}
+
 const now = () => new Date().toISOString();
 const session = (fields) => ({
   id: 'a1b2c3d4',
@@ -148,6 +173,18 @@ await sleep(SETTLE_SECONDS * 1000);
 if (first.exited) await fail(`The app exited after its first frame: ${JSON.stringify(first.exited)}.`);
 if (reaction(first) !== 'rest asleep none') await fail('With no manager, the app should rest, asleep.');
 capture();
+
+const piece = path.join(profile, 'piece');
+mkdirSync(piece);
+await says('1: piece.json is missing.', 'add', piece);
+writeFileSync(path.join(piece, 'piece.json'), JSON.stringify({ format: 1, kind: 'character', title: 'Patchwork' }));
+copyFileSync(new URL('../tests/fixtures/characters/character.glb', import.meta.url), path.join(piece, 'character.glb'));
+await says('0: Added “Patchwork” and showing it.', 'add', piece);
+await says('0: Showing Fox.', 'show', 'fox');
+await says('0: Showing Patchwork.', 'show', 'patchwork');
+await says('1: There is no spirit or character called “Nobody”. The spirits are Fox, Moss deer, Water spirit, Bird, Lantern, Hermit crab.', 'show', 'Nobody');
+await says('2: Usage: add <piece folder>, or show <spirit or character>.', 'add');
+if (readdirSync(path.join(data, 'characters')).length !== 1 || !existsSync(pages)) await fail(`The app should keep its characters and pages in ${profile}.`);
 
 const starts = () => first.log.match(/^start: /gm).length;
 const startsBefore = starts();
@@ -190,12 +227,14 @@ await reacts('rest asleep none');
 
 first.child.kill();
 await until('exit of the first', () => first.exited, { app: null });
+await says('1: Grove Companion isn’t running.', 'show', 'Fox');
 const relaunch = start('relaunch');
 await ready(relaunch);
+await says('0: Showing Patchwork.', 'show', 'Patchwork');
 
 if (apps.some((app) => /^(failed|helpers): /m.test(app.log))) await fail('The app reported an error.');
 writeFileSync(`${screenshot}.log`, logs());
 console.log(logs());
 await cleanUp();
-console.log('The app started, drew its first frame, kept running, started only once, followed a manager through a reconnect and started again.');
+console.log('The app started, drew its first frame, kept running, took commands, started only once, followed a manager through a reconnect and started again.');
 process.exit(0);

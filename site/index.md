@@ -91,6 +91,58 @@ Once it is running, the spirit is on the desktop and reacts while Agent Guild ru
 
 Run the Install block again. It closes the companion, replaces it, and starts it again. The spirit's place, the chosen spirit and added characters are kept.
 
+## Add a character
+
+A character is a piece folder holding `piece.json` and `character.glb`. This checks it as **Add character…** in the tray or menu bar menu does, adds it and shows it. Set the `folder` line to the piece folder.
+
+The companion must be running, and recent enough to take commands: each block says when to run Install first. It prints one line saying what happened, and fails when it didn't work.
+
+Windows:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$folder = 'C:\path\to\piece'
+if (-not (Test-Path -LiteralPath (Join-Path $env:APPDATA 'com.oddessentials.agentguild.companion\control.json'))) { throw 'Grove Companion needs updating or starting first: run the Install block, then try again.' }
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+$dir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Grove Companion').InstallLocation.Trim('"')
+& (Join-Path $dir 'agent-guild-companions.exe') add $folder | Write-Output
+if ($LASTEXITCODE -ne 0) { throw 'The character was not added and shown.' }
+```
+
+macOS:
+
+```sh
+app='/Applications/Grove Companion.app'
+folder='/path/to/piece'
+if [ ! -f "$HOME/Library/Application Support/com.oddessentials.agentguild.companion/control.json" ]; then echo 'Grove Companion needs updating or starting first: run the Install block, then try again.'; exit 1; fi
+"$app/Contents/MacOS/agent-guild-companions" add "$folder"
+```
+
+## Choose the spirit
+
+Set the `spirit` line to Fox, Moss deer, Water spirit, Bird, Lantern or Hermit crab, or to an added character's title or id. The choice is kept, as it is from the menu. The same conditions apply as for adding a character.
+
+Windows:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$spirit = 'Fox'
+if (-not (Test-Path -LiteralPath (Join-Path $env:APPDATA 'com.oddessentials.agentguild.companion\control.json'))) { throw 'Grove Companion needs updating or starting first: run the Install block, then try again.' }
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+$dir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Grove Companion').InstallLocation.Trim('"')
+& (Join-Path $dir 'agent-guild-companions.exe') show $spirit | Write-Output
+if ($LASTEXITCODE -ne 0) { throw 'The spirit was not changed.' }
+```
+
+macOS:
+
+```sh
+app='/Applications/Grove Companion.app'
+spirit='Fox'
+if [ ! -f "$HOME/Library/Application Support/com.oddessentials.agentguild.companion/control.json" ]; then echo 'Grove Companion needs updating or starting first: run the Install block, then try again.'; exit 1; fi
+"$app/Contents/MacOS/agent-guild-companions" show "$spirit"
+```
+
 ## Uninstall
 
 Windows:

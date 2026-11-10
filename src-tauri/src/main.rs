@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod characters;
+mod control;
 mod manager;
 
 use std::{
@@ -21,7 +22,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 static FOLLOWING: AtomicBool = AtomicBool::new(false);
 
@@ -55,7 +56,8 @@ const SPIRITS: [&str; 6] = ["Fox", "Moss deer", "Water spirit", "Bird", "Lantern
 struct Characters {
     dir: PathBuf,
     menu: Submenu<Wry>,
-    shown: Mutex<Option<String>>,
+    shown: watch::Sender<Option<String>>,
+    choosing: Mutex<Option<(String, oneshot::Sender<Result<(), String>>)>>,
     unavailable: Mutex<HashSet<String>>,
     busy: AtomicBool,
     checking: Mutex<Option<(String, oneshot::Sender<Option<String>>)>>,
@@ -114,7 +116,7 @@ fn refresh_menu(app: &AppHandle) {
     let task = app.clone();
     let _ = task.run_on_main_thread(move || {
         let state = app.state::<Characters>();
-        let shown = state.shown.lock().unwrap().clone();
+        let shown = state.shown.borrow().clone();
         let unavailable = state.unavailable.lock().unwrap().clone();
         let entries = menu_entries(shown.as_deref(), &characters::list_characters(&state.dir), &unavailable, state.busy.load(Ordering::SeqCst));
         let rebuilt = state.menu.items().and_then(|items| items.iter().try_for_each(|item| state.menu.remove(item))).and_then(|_| append(&app, &state.menu, &entries));
@@ -128,15 +130,16 @@ fn tell(app: &AppHandle, title: &str, message: String) {
     app.dialog().message(message).title(title).kind(MessageDialogKind::Error).show(|_| {});
 }
 
-async fn exclusive<F: std::future::Future<Output = ()>>(app: &AppHandle, work: F) {
+async fn exclusive<T>(app: &AppHandle, work: impl std::future::Future<Output = T>) -> Option<T> {
     let state = app.state::<Characters>();
     if state.busy.swap(true, Ordering::SeqCst) {
-        return;
+        return None;
     }
     refresh_menu(app);
-    work.await;
+    let done = work.await;
     state.busy.store(false, Ordering::SeqCst);
     refresh_menu(app);
+    Some(done)
 }
 
 async fn add_character(app: AppHandle) {
@@ -208,6 +211,65 @@ async fn remove_character(app: AppHandle, id: String) {
     .await;
 }
 
+fn spirit_named(name: &str, added: &[characters::Character], unavailable: &HashSet<String>) -> Result<(String, String), String> {
+    let name = name.trim();
+    let titled: Vec<&characters::Character> = added.iter().filter(|character| character.title.to_lowercase() == name.to_lowercase()).collect();
+    let character = match (added.iter().find(|character| character.id == name), SPIRITS.iter().position(|spirit| spirit.eq_ignore_ascii_case(name)), titled.as_slice()) {
+        (Some(character), _, _) => character,
+        (None, Some(n), _) => return Ok((n.to_string(), SPIRITS[n].to_string())),
+        (None, None, [character]) => *character,
+        (None, None, []) => return Err(format!("There is no spirit or character called “{name}”. The spirits are {}.", SPIRITS.join(", "))),
+        (None, None, several) => return Err(format!("More than one character is called “{name}”. Use an id instead: {}.", several.iter().map(|character| character.id.as_str()).collect::<Vec<_>>().join(", "))),
+    };
+    if !character.readable || unavailable.contains(&character.id) {
+        return Err(format!("“{}” can’t be shown.", character.title));
+    }
+    Ok((character.id.clone(), character.title.clone()))
+}
+
+fn settle(state: &Characters, id: &str, outcome: Result<(), String>) {
+    let mut choosing = state.choosing.lock().unwrap();
+    if choosing.as_ref().is_some_and(|(wanted, _)| wanted == id) {
+        let _ = choosing.take().unwrap().1.send(outcome);
+    }
+}
+
+async fn show(app: &AppHandle, id: &str) -> Result<(), String> {
+    let (answer, outcome) = oneshot::channel();
+    *app.state::<Characters>().choosing.lock().unwrap() = Some((id.to_string(), answer));
+    let _ = app.emit("spirit", id.parse::<usize>().map_or(json!(id), |n| json!(n)));
+    match tokio::time::timeout(CHECK_TIME, outcome).await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(_)) => Err("Another choice was made first.".into()),
+        Err(_) => Err("It took too long to show.".into()),
+    }
+}
+
+async fn answer(app: AppHandle, request: control::Request) -> Result<String, String> {
+    let state = app.state::<Characters>();
+    let mut shown = state.shown.subscribe();
+    if !tokio::time::timeout(CHECK_TIME, shown.wait_for(Option::is_some)).await.is_ok_and(|ready| ready.is_ok()) {
+        return Err("Grove Companion is still starting. Try again in a moment.".into());
+    }
+    match request.command.as_str() {
+        "add" => exclusive(&app, async {
+            let id = import(&app, Some(request.value.into())).await?;
+            let title = characters::list_characters(&state.dir).into_iter().find(|character| character.id == id).map_or_else(|| id.clone(), |character| character.title);
+            show(&app, &id).await.map_err(|why| format!("Added “{title}”, but it can’t be shown: {why}"))?;
+            Ok(format!("Added “{title}” and showing it."))
+        })
+        .await
+        .unwrap_or_else(|| Err("Grove Companion is busy adding or removing a character. Try again in a moment.".into())),
+        "show" => {
+            let unavailable = state.unavailable.lock().unwrap().clone();
+            let (id, label) = spirit_named(&request.value, &characters::list_characters(&state.dir), &unavailable)?;
+            show(&app, &id).await.map_err(|why| format!("“{label}” can’t be shown: {why}"))?;
+            Ok(format!("Showing {label}."))
+        }
+        _ => Err(control::USAGE.into()),
+    }
+}
+
 /// The page calls this once it is listening, so it does not miss the manager's first message.
 #[tauri::command]
 fn connect_manager(app: AppHandle) {
@@ -218,7 +280,9 @@ fn connect_manager(app: AppHandle) {
 
 #[tauri::command]
 fn spirit_shown(app: AppHandle, id: String) {
-    *app.state::<Characters>().shown.lock().unwrap() = Some(id);
+    let state = app.state::<Characters>();
+    settle(&state, &id, Ok(()));
+    state.shown.send_replace(Some(id));
     refresh_menu(&app);
 }
 
@@ -234,7 +298,9 @@ fn character_checked(state: tauri::State<Characters>, token: String, problem: Op
 #[tauri::command]
 fn character_unavailable(app: AppHandle, id: String, problem: String) {
     eprintln!("character {id}: {problem}");
-    app.state::<Characters>().unavailable.lock().unwrap().insert(id);
+    let state = app.state::<Characters>();
+    settle(&state, &id, Err(problem));
+    state.unavailable.lock().unwrap().insert(id);
     refresh_menu(&app);
 }
 
@@ -258,6 +324,17 @@ fn model_response(app: &AppHandle, method: &Method, path: &str) -> Response<Vec<
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    let args: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
+    if let Some(asked) = control::parse(&args, &std::env::current_dir().unwrap_or_default()) {
+        let (code, said) = match asked.map(|request| control::file(&context.config().identifier).ok_or_else(|| "Grove Companion isn’t running.".to_string()).and_then(|file| control::send(&file, &request))) {
+            Ok(Ok(said)) => (0, said),
+            Ok(Err(why)) => (1, why),
+            Err(usage) => (2, usage),
+        };
+        println!("{said}");
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         .plugin(tauri_plugin_dialog::init())
@@ -289,11 +366,22 @@ fn main() {
             *BOUNDS.lock().unwrap() = (window.outer_position()?, window.outer_size()?);
             tauri::async_runtime::spawn(follow_cursor(app.handle().clone()));
 
-            let dir = app.path().app_data_dir()?.join("characters");
+            let dir = match control::home() {
+                Some(home) => home,
+                None => app.path().app_data_dir()?,
+            }
+            .join("characters");
             characters::sweep(&dir);
             let spirit_menu = Submenu::with_id(app, "spirit", "Spirit", true)?;
-            app.manage(Characters { dir, menu: spirit_menu.clone(), shown: Mutex::new(None), unavailable: Mutex::default(), busy: AtomicBool::new(false), checking: Mutex::new(None) });
+            app.manage(Characters { dir, menu: spirit_menu.clone(), shown: watch::channel(None).0, choosing: Mutex::new(None), unavailable: Mutex::default(), busy: AtomicBool::new(false), checking: Mutex::new(None) });
             refresh_menu(app.handle());
+            match control::file(&app.config().identifier).ok_or_else(|| std::io::Error::other("no data folder")).and_then(|file| control::listen(&file)) {
+                Ok((listener, token)) => {
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(control::serve(listener, token, move |request| answer(handle.clone(), request)));
+                }
+                Err(err) => eprintln!("control: {err}"),
+            }
 
             let menu = Menu::new(app)?;
             menu.append(&spirit_menu)?;
@@ -319,7 +407,7 @@ fn main() {
                 .build(app)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("the companion could not start");
 }
 
@@ -365,6 +453,19 @@ mod tests {
         }
         assert!(matches!(find(&entries, &format!("character-{}", good.id)), Entry::Check { enabled: true, checked: true, .. }));
         assert!(matches!(find(&entries, "remove"), Entry::Submenu { enabled: true, .. }));
+    }
+
+    #[test]
+    fn a_spirit_or_character_is_found_by_name_title_or_id() {
+        let (good, twin, lost) = (character(1, true), characters::Character { title: "piece 1".into(), ..character(2, true) }, character(3, true));
+        let unavailable = HashSet::from([lost.id.clone()]);
+        assert_eq!(spirit_named(" moss DEER ", &[], &unavailable), Ok(("1".into(), "Moss deer".into())));
+        assert_eq!(spirit_named("Piece 1", &[good.clone()], &unavailable), Ok((good.id.clone(), "Piece 1".into())));
+        assert_eq!(spirit_named(&twin.id, &[good.clone(), twin.clone()], &unavailable), Ok((twin.id.clone(), "piece 1".into())));
+        assert_eq!(spirit_named("Piece 1", &[good.clone(), twin.clone()], &unavailable), Err(format!("More than one character is called “Piece 1”. Use an id instead: {}, {}.", good.id, twin.id)));
+        assert_eq!(spirit_named("Piece 3", &[lost.clone()], &unavailable), Err("“Piece 3” can’t be shown.".into()));
+        assert_eq!(spirit_named("Piece 2", &[character(2, false)], &unavailable), Err("“Piece 2” can’t be shown.".into()));
+        assert!(spirit_named("Nobody", &[good], &unavailable).unwrap_err().starts_with("There is no spirit or character called “Nobody”. The spirits are Fox, "));
     }
 
     #[test]
