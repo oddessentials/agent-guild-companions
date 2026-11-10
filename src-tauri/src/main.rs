@@ -5,10 +5,10 @@ mod control;
 mod manager;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
     time::Duration,
@@ -57,7 +57,8 @@ struct Characters {
     dir: PathBuf,
     menu: Submenu<Wry>,
     shown: watch::Sender<Option<String>>,
-    choosing: Mutex<Option<(String, oneshot::Sender<Result<(), String>>)>>,
+    order: AtomicU64,
+    choosing: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
     unavailable: Mutex<HashSet<String>>,
     busy: AtomicBool,
     checking: Mutex<Option<(String, oneshot::Sender<Option<String>>)>>,
@@ -142,7 +143,18 @@ async fn exclusive<T>(app: &AppHandle, work: impl std::future::Future<Output = T
     Some(done)
 }
 
+/// Taken when a choice is made, not when it is ready to show, so the page can tell which of two is the newer.
+fn issue(app: &AppHandle) -> u64 {
+    app.state::<Characters>().order.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+fn select(app: &AppHandle, spirit: &str, order: u64, request: Option<&str>) {
+    let spirit = spirit.parse::<usize>().map_or(json!(spirit), |n| json!(n));
+    let _ = app.emit("spirit", json!({ "spirit": spirit, "order": order, "request": request }));
+}
+
 async fn add_character(app: AppHandle) {
+    let order = issue(&app);
     exclusive(&app, async {
         let (chosen, folder) = oneshot::channel();
         app.dialog().file().set_title("Choose a character folder").pick_folder(move |folder| {
@@ -150,9 +162,7 @@ async fn add_character(app: AppHandle) {
         });
         let Some(folder) = folder.await.ok().flatten() else { return };
         match import(&app, folder.into_path().ok()).await {
-            Ok(id) => {
-                let _ = app.emit("spirit", json!(id));
-            }
+            Ok(id) => select(&app, &id, order, None),
             Err(problem) => tell(&app, "This character can’t be added", problem),
         }
     })
@@ -227,25 +237,22 @@ fn spirit_named(name: &str, added: &[characters::Character], unavailable: &HashS
     Ok((character.id.clone(), character.title.clone()))
 }
 
-fn settle(state: &Characters, id: &str, outcome: Result<(), String>) {
-    let mut choosing = state.choosing.lock().unwrap();
-    if choosing.as_ref().is_some_and(|(wanted, _)| wanted == id) {
-        let _ = choosing.take().unwrap().1.send(outcome);
-    }
-}
-
-async fn show(app: &AppHandle, id: &str) -> Result<(), String> {
-    let (answer, outcome) = oneshot::channel();
-    *app.state::<Characters>().choosing.lock().unwrap() = Some((id.to_string(), answer));
-    let _ = app.emit("spirit", id.parse::<usize>().map_or(json!(id), |n| json!(n)));
-    match tokio::time::timeout(CHECK_TIME, outcome).await {
-        Ok(Ok(outcome)) => outcome,
-        Ok(Err(_)) => Err("Another choice was made first.".into()),
-        Err(_) => Err("It took too long to show.".into()),
+async fn show(app: &AppHandle, id: &str, order: u64) -> Result<(), String> {
+    let state = app.state::<Characters>();
+    let (token, (answer, outcome)) = (characters::new_id(), oneshot::channel());
+    state.choosing.lock().unwrap().insert(token.clone(), answer);
+    select(app, id, order, Some(&token));
+    let outcome = tokio::time::timeout(CHECK_TIME, outcome).await;
+    state.choosing.lock().unwrap().remove(&token);
+    match outcome {
+        Ok(Ok(None)) => Ok(()),
+        Ok(Ok(Some(problem))) => Err(problem),
+        _ => Err("It took too long to show.".into()),
     }
 }
 
 async fn answer(app: AppHandle, request: control::Request) -> Result<String, String> {
+    let order = issue(&app);
     let state = app.state::<Characters>();
     let mut shown = state.shown.subscribe();
     if !tokio::time::timeout(CHECK_TIME, shown.wait_for(Option::is_some)).await.is_ok_and(|ready| ready.is_ok()) {
@@ -255,7 +262,7 @@ async fn answer(app: AppHandle, request: control::Request) -> Result<String, Str
         "add" => exclusive(&app, async {
             let id = import(&app, Some(request.value.into())).await?;
             let title = characters::list_characters(&state.dir).into_iter().find(|character| character.id == id).map_or_else(|| id.clone(), |character| character.title);
-            show(&app, &id).await.map_err(|why| format!("Added “{title}”, but it can’t be shown: {why}"))?;
+            show(&app, &id, order).await.map_err(|why| format!("Added “{title}”, but it isn’t shown: {why}"))?;
             Ok(format!("Added “{title}” and showing it."))
         })
         .await
@@ -263,7 +270,7 @@ async fn answer(app: AppHandle, request: control::Request) -> Result<String, Str
         "show" => {
             let unavailable = state.unavailable.lock().unwrap().clone();
             let (id, label) = spirit_named(&request.value, &characters::list_characters(&state.dir), &unavailable)?;
-            show(&app, &id).await.map_err(|why| format!("“{label}” can’t be shown: {why}"))?;
+            show(&app, &id, order).await.map_err(|why| format!("{label} isn’t shown: {why}"))?;
             Ok(format!("Showing {label}."))
         }
         _ => Err(control::USAGE.into()),
@@ -280,10 +287,15 @@ fn connect_manager(app: AppHandle) {
 
 #[tauri::command]
 fn spirit_shown(app: AppHandle, id: String) {
-    let state = app.state::<Characters>();
-    settle(&state, &id, Ok(()));
-    state.shown.send_replace(Some(id));
+    app.state::<Characters>().shown.send_replace(Some(id));
     refresh_menu(&app);
+}
+
+#[tauri::command]
+fn spirit_chosen(state: tauri::State<Characters>, request: String, problem: Option<String>) {
+    if let Some(answer) = state.choosing.lock().unwrap().remove(&request) {
+        let _ = answer.send(problem);
+    }
 }
 
 #[tauri::command]
@@ -298,9 +310,7 @@ fn character_checked(state: tauri::State<Characters>, token: String, problem: Op
 #[tauri::command]
 fn character_unavailable(app: AppHandle, id: String, problem: String) {
     eprintln!("character {id}: {problem}");
-    let state = app.state::<Characters>();
-    settle(&state, &id, Err(problem));
-    state.unavailable.lock().unwrap().insert(id);
+    app.state::<Characters>().unavailable.lock().unwrap().insert(id);
     refresh_menu(&app);
 }
 
@@ -343,7 +353,7 @@ fn main() {
             let (method, path) = (request.method().clone(), request.uri().path().to_string());
             tauri::async_runtime::spawn_blocking(move || responder.respond(model_response(&app, &method, &path)));
         })
-        .invoke_handler(tauri::generate_handler![connect_manager, spirit_shown, character_checked, character_unavailable, report])
+        .invoke_handler(tauri::generate_handler![connect_manager, spirit_shown, spirit_chosen, character_checked, character_unavailable, report])
         .on_window_event(|_, event| match event {
             WindowEvent::Moved(at) => BOUNDS.lock().unwrap().0 = *at,
             WindowEvent::Resized(size) => BOUNDS.lock().unwrap().1 = *size,
@@ -373,7 +383,7 @@ fn main() {
             .join("characters");
             characters::sweep(&dir);
             let spirit_menu = Submenu::with_id(app, "spirit", "Spirit", true)?;
-            app.manage(Characters { dir, menu: spirit_menu.clone(), shown: watch::channel(None).0, choosing: Mutex::new(None), unavailable: Mutex::default(), busy: AtomicBool::new(false), checking: Mutex::new(None) });
+            app.manage(Characters { dir, menu: spirit_menu.clone(), shown: watch::channel(None).0, order: AtomicU64::new(0), choosing: Mutex::default(), unavailable: Mutex::default(), busy: AtomicBool::new(false), checking: Mutex::new(None) });
             refresh_menu(app.handle());
             match control::file(&app.config().identifier).ok_or_else(|| std::io::Error::other("no data folder")).and_then(|file| control::listen(&file)) {
                 Ok((listener, token)) => {
@@ -399,9 +409,9 @@ fn main() {
                     } else if let Some(character) = id.strip_prefix("remove-").filter(|id| characters::is_id(id)) {
                         tauri::async_runtime::spawn(remove_character(app.clone(), character.to_string()));
                     } else if let Some(n) = id.strip_prefix("spirit-").and_then(|n| n.parse::<usize>().ok()) {
-                        let _ = app.emit("spirit", json!(n));
+                        select(app, &n.to_string(), issue(app), None);
                     } else if let Some(character) = id.strip_prefix("character-").filter(|id| characters::is_id(id)) {
-                        let _ = app.emit("spirit", json!(character));
+                        select(app, character, issue(app), None);
                     }
                 })
                 .build(app)?;
