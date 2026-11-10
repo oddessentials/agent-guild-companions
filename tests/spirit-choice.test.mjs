@@ -191,3 +191,19 @@ test('a character whose import finishes after a newer choice is added without be
   assert.equal(shownAs(app), '1');
   assert.equal(app.stored('spirit'), '1');
 });
+
+test('a command replaced while its character is still loading is answered at once, and once', async () => {
+  let finish;
+  const stalled = new Promise((resolve) => { finish = resolve; });
+  const app = await companion({ spirit: '2', models: { [url(ID)]: () => stalled, [url(OTHER)]: 'character' } });
+  const older = pick(app, ID, 'older');
+  await pick(app, OTHER, 'newer');
+  assert.deepEqual(commands(app, 'spirit_chosen'), [{ request: 'older', problem: REPLACED }, { request: 'newer', problem: null }]);
+  assert.equal(shownAs(app), OTHER);
+  finish('character');
+  await older;
+  assert.equal(commands(app, 'spirit_chosen').length, 2);
+  assert.equal(shownAs(app), OTHER);
+  assert.equal(app.stored('spirit'), OTHER);
+  assert.ok(!commands(app, 'spirit_shown').some(({ id }) => id === ID));
+});

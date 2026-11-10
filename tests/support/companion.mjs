@@ -54,7 +54,7 @@ export async function companion({ saved = null, spirit = null, models = {}, moni
   }
   class Loader {
     async loadAsync(url) {
-      if (Object.hasOwn(models, url)) return new GLTFLoader().parseAsync(fixture(models[url]), '');
+      if (Object.hasOwn(models, url)) return new GLTFLoader().parseAsync(fixture(typeof models[url] === 'function' ? await models[url]() : models[url]), '');
       if (url.startsWith('character://')) throw new Error(`404 ${url}`);
       const scene = new THREE.Group().add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial({ map: new THREE.Texture(bitmap('bundled')) })));
       return { scene, animations: [new THREE.AnimationClip('idle', 1, [])] };

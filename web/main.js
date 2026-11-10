@@ -232,21 +232,29 @@ function unavailable(n, error) {
 
 const REPLACED = 'Another choice was made first.';
 let chosen = 0; // the order of the newest choice heard of, so one that arrives late changes nothing
+let replace = null; // answers the choice under way, without waiting for its load, when a newer one arrives
 
 async function select({ spirit, order, request }) {
+  let answered = !request;
+  const answer = async (problem) => {
+    if (answered) return;
+    answered = true;
+    await invoke('spirit_chosen', { request, problem });
+  };
+  if (order <= chosen) return answer(REPLACED);
+  chosen = order;
+  replace?.();
+  replace = () => answer(REPLACED);
   let problem = REPLACED;
-  if (order > chosen) {
-    chosen = order;
-    try {
-      await chooseSpirit(spirit);
-      if (chosen === order && character.n === spirit) problem = null;
-    } catch (error) {
-      unavailable(spirit, error);
-      shown();
-      problem = String(error?.message ?? error);
-    }
+  try {
+    await chooseSpirit(spirit);
+    if (chosen === order && character.n === spirit) problem = null;
+  } catch (error) {
+    unavailable(spirit, error);
+    shown();
+    problem = String(error?.message ?? error);
   }
-  if (request) await invoke('spirit_chosen', { request, problem });
+  await answer(problem);
 }
 
 async function checkCharacter(token) {
