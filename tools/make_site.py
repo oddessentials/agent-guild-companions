@@ -95,7 +95,7 @@ def main() -> None:
         encoding="utf-8",
     )
     (out / "llms.txt").write_text(
-        "# %s\n\n> %s\n\n## Docs\n\n- [%s](%sindex.md): install, check, update and uninstall Grove Companion on Windows and macOS, step by step.\n"
+        "# %s\n\n> %s\n\n## Docs\n\n- [%s](%sindex.md): install, check, update and uninstall Grove Companion on Windows and macOS, add a character and choose the spirit, step by step.\n"
         % (title, summary.strip(), title, URL),
         encoding="utf-8",
     )

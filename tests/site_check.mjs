@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,7 @@ const data = windows
   ? [join(process.env.APPDATA, id), join(process.env.LOCALAPPDATA, id)]
   : [join(homedir(), 'Library/Application Support', id), join(homedir(), 'Library/WebKit', id)];
 const app = windows ? join(process.env.LOCALAPPDATA, 'Grove Companion', 'agent-guild-companions.exe') : '/Applications/Grove Companion.app';
+const agent = join(homedir(), 'Library/LaunchAgents', `${id}.plist`);
 const work = mkdtempSync(join(tmpdir(), 'companion-site-'));
 
 function block(heading) {
@@ -29,18 +30,20 @@ function block(heading) {
 function run(heading) {
   const file = join(work, windows ? 'block.ps1' : 'block.sh');
   writeFileSync(file, block(heading));
-  const out = windows
-    ? execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8' })
-    : execFileSync('sh', [file], { encoding: 'utf8' });
-  const last = out.trim().split(/\r?\n/).at(-1);
+  const done = windows
+    ? spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
+    : spawnSync('sh', [file], { encoding: 'utf8' });
+  assert.equal(done.status, 0, `"${heading}" failed: ${done.error ?? done.stderr ?? ''}\n${done.stdout}`);
+  if (!windows) assert.equal(done.stderr, '', `"${heading}" printed warnings`);
+  const last = done.stdout.trim().split(/\r?\n/).at(-1);
   console.log(`${heading}: ${last}`);
   return last;
 }
 
 function startsAtSignIn() {
-  if (!windows) return false;
   try {
-    execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Grove Companion'], { stdio: 'ignore' });
+    if (windows) execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Grove Companion'], { stdio: 'ignore' });
+    else assert.equal(execFileSync('plutil', ['-extract', 'ProgramArguments.0', 'raw', '-o', '-', agent], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(), `${app}/Contents/MacOS/agent-guild-companions`);
     return true;
   } catch {
     return false;
@@ -51,7 +54,7 @@ try {
   assert.equal(run('Install'), 'Installed.');
   assert.equal(run('Check'), 'Grove Companion is running.');
   assert.ok(existsSync(app), `${app} is installed`);
-  assert.equal(startsAtSignIn(), windows);
+  assert.equal(startsAtSignIn(), true);
 
   for (const dir of data) {
     mkdirSync(dir, { recursive: true });
@@ -60,6 +63,7 @@ try {
 
   assert.equal(run('Install'), 'Installed.');
   assert.equal(run('Check'), 'Grove Companion is running.');
+  assert.equal(startsAtSignIn(), true);
   for (const dir of data) assert.ok(existsSync(join(dir, 'site-check')), `updating kept ${dir}`);
 
   assert.equal(run('Uninstall'), 'Uninstalled.');

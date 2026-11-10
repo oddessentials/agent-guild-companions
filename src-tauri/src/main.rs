@@ -1,13 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod characters;
+mod control;
 mod manager;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
     time::Duration,
@@ -21,7 +22,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 static FOLLOWING: AtomicBool = AtomicBool::new(false);
 
@@ -55,7 +56,9 @@ const SPIRITS: [&str; 6] = ["Fox", "Moss deer", "Water spirit", "Bird", "Lantern
 struct Characters {
     dir: PathBuf,
     menu: Submenu<Wry>,
-    shown: Mutex<Option<String>>,
+    shown: watch::Sender<Option<String>>,
+    order: AtomicU64,
+    choosing: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
     unavailable: Mutex<HashSet<String>>,
     busy: AtomicBool,
     checking: Mutex<Option<(String, oneshot::Sender<Option<String>>)>>,
@@ -114,7 +117,7 @@ fn refresh_menu(app: &AppHandle) {
     let task = app.clone();
     let _ = task.run_on_main_thread(move || {
         let state = app.state::<Characters>();
-        let shown = state.shown.lock().unwrap().clone();
+        let shown = state.shown.borrow().clone();
         let unavailable = state.unavailable.lock().unwrap().clone();
         let entries = menu_entries(shown.as_deref(), &characters::list_characters(&state.dir), &unavailable, state.busy.load(Ordering::SeqCst));
         let rebuilt = state.menu.items().and_then(|items| items.iter().try_for_each(|item| state.menu.remove(item))).and_then(|_| append(&app, &state.menu, &entries));
@@ -128,18 +131,30 @@ fn tell(app: &AppHandle, title: &str, message: String) {
     app.dialog().message(message).title(title).kind(MessageDialogKind::Error).show(|_| {});
 }
 
-async fn exclusive<F: std::future::Future<Output = ()>>(app: &AppHandle, work: F) {
+async fn exclusive<T>(app: &AppHandle, work: impl std::future::Future<Output = T>) -> Option<T> {
     let state = app.state::<Characters>();
     if state.busy.swap(true, Ordering::SeqCst) {
-        return;
+        return None;
     }
     refresh_menu(app);
-    work.await;
+    let done = work.await;
     state.busy.store(false, Ordering::SeqCst);
     refresh_menu(app);
+    Some(done)
+}
+
+/// Taken when a choice is made, not when it is ready to show, so the page can tell which of two is the newer.
+fn issue(app: &AppHandle) -> u64 {
+    app.state::<Characters>().order.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+fn select(app: &AppHandle, spirit: &str, order: u64, request: Option<&str>) {
+    let spirit = spirit.parse::<usize>().map_or(json!(spirit), |n| json!(n));
+    let _ = app.emit("spirit", json!({ "spirit": spirit, "order": order, "request": request }));
 }
 
 async fn add_character(app: AppHandle) {
+    let order = issue(&app);
     exclusive(&app, async {
         let (chosen, folder) = oneshot::channel();
         app.dialog().file().set_title("Choose a character folder").pick_folder(move |folder| {
@@ -147,9 +162,7 @@ async fn add_character(app: AppHandle) {
         });
         let Some(folder) = folder.await.ok().flatten() else { return };
         match import(&app, folder.into_path().ok()).await {
-            Ok(id) => {
-                let _ = app.emit("spirit", json!(id));
-            }
+            Ok(id) => select(&app, &id, order, None),
             Err(problem) => tell(&app, "This character can’t be added", problem),
         }
     })
@@ -208,6 +221,62 @@ async fn remove_character(app: AppHandle, id: String) {
     .await;
 }
 
+fn spirit_named(name: &str, added: &[characters::Character], unavailable: &HashSet<String>) -> Result<(String, String), String> {
+    let name = name.trim();
+    let titled: Vec<&characters::Character> = added.iter().filter(|character| character.title.to_lowercase() == name.to_lowercase()).collect();
+    let character = match (added.iter().find(|character| character.id == name), SPIRITS.iter().position(|spirit| spirit.eq_ignore_ascii_case(name)), titled.as_slice()) {
+        (Some(character), _, _) => character,
+        (None, Some(n), _) => return Ok((n.to_string(), SPIRITS[n].to_string())),
+        (None, None, [character]) => *character,
+        (None, None, []) => return Err(format!("There is no spirit or character called “{name}”. The spirits are {}.", SPIRITS.join(", "))),
+        (None, None, several) => return Err(format!("More than one character is called “{name}”. Use an id instead: {}.", several.iter().map(|character| character.id.as_str()).collect::<Vec<_>>().join(", "))),
+    };
+    if !character.readable || unavailable.contains(&character.id) {
+        return Err(format!("“{}” can’t be shown.", character.title));
+    }
+    Ok((character.id.clone(), character.title.clone()))
+}
+
+async fn show(app: &AppHandle, id: &str, order: u64) -> Result<(), String> {
+    let state = app.state::<Characters>();
+    let (token, (answer, outcome)) = (characters::new_id(), oneshot::channel());
+    state.choosing.lock().unwrap().insert(token.clone(), answer);
+    select(app, id, order, Some(&token));
+    let outcome = tokio::time::timeout(CHECK_TIME, outcome).await;
+    state.choosing.lock().unwrap().remove(&token);
+    match outcome {
+        Ok(Ok(None)) => Ok(()),
+        Ok(Ok(Some(problem))) => Err(problem),
+        _ => Err("It took too long to show.".into()),
+    }
+}
+
+async fn answer(app: AppHandle, request: control::Request) -> Result<String, String> {
+    let order = issue(&app);
+    let state = app.state::<Characters>();
+    let mut shown = state.shown.subscribe();
+    if !tokio::time::timeout(CHECK_TIME, shown.wait_for(Option::is_some)).await.is_ok_and(|ready| ready.is_ok()) {
+        return Err("Grove Companion is still starting. Try again in a moment.".into());
+    }
+    match request.command.as_str() {
+        "add" => exclusive(&app, async {
+            let id = import(&app, Some(request.value.into())).await?;
+            let title = characters::list_characters(&state.dir).into_iter().find(|character| character.id == id).map_or_else(|| id.clone(), |character| character.title);
+            show(&app, &id, order).await.map_err(|why| format!("Added “{title}”, but it isn’t shown: {why}"))?;
+            Ok(format!("Added “{title}” and showing it."))
+        })
+        .await
+        .unwrap_or_else(|| Err("Grove Companion is busy adding or removing a character. Try again in a moment.".into())),
+        "show" => {
+            let unavailable = state.unavailable.lock().unwrap().clone();
+            let (id, label) = spirit_named(&request.value, &characters::list_characters(&state.dir), &unavailable)?;
+            show(&app, &id, order).await.map_err(|why| format!("{label} isn’t shown: {why}"))?;
+            Ok(format!("Showing {label}."))
+        }
+        _ => Err(control::USAGE.into()),
+    }
+}
+
 /// The page calls this once it is listening, so it does not miss the manager's first message.
 #[tauri::command]
 fn connect_manager(app: AppHandle) {
@@ -218,8 +287,15 @@ fn connect_manager(app: AppHandle) {
 
 #[tauri::command]
 fn spirit_shown(app: AppHandle, id: String) {
-    *app.state::<Characters>().shown.lock().unwrap() = Some(id);
+    app.state::<Characters>().shown.send_replace(Some(id));
     refresh_menu(&app);
+}
+
+#[tauri::command]
+fn spirit_chosen(state: tauri::State<Characters>, request: String, problem: Option<String>) {
+    if let Some(answer) = state.choosing.lock().unwrap().remove(&request) {
+        let _ = answer.send(problem);
+    }
 }
 
 #[tauri::command]
@@ -258,6 +334,17 @@ fn model_response(app: &AppHandle, method: &Method, path: &str) -> Response<Vec<
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    let args: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
+    if let Some(asked) = control::parse(&args, &std::env::current_dir().unwrap_or_default()) {
+        let (code, said) = match asked.map(|request| control::file(&context.config().identifier).ok_or_else(|| "Grove Companion isn’t running.".to_string()).and_then(|file| control::send(&file, &request))) {
+            Ok(Ok(said)) => (0, said),
+            Ok(Err(why)) => (1, why),
+            Err(usage) => (2, usage),
+        };
+        println!("{said}");
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         .plugin(tauri_plugin_dialog::init())
@@ -266,7 +353,7 @@ fn main() {
             let (method, path) = (request.method().clone(), request.uri().path().to_string());
             tauri::async_runtime::spawn_blocking(move || responder.respond(model_response(&app, &method, &path)));
         })
-        .invoke_handler(tauri::generate_handler![connect_manager, spirit_shown, character_checked, character_unavailable, report])
+        .invoke_handler(tauri::generate_handler![connect_manager, spirit_shown, spirit_chosen, character_checked, character_unavailable, report])
         .on_window_event(|_, event| match event {
             WindowEvent::Moved(at) => BOUNDS.lock().unwrap().0 = *at,
             WindowEvent::Resized(size) => BOUNDS.lock().unwrap().1 = *size,
@@ -289,11 +376,22 @@ fn main() {
             *BOUNDS.lock().unwrap() = (window.outer_position()?, window.outer_size()?);
             tauri::async_runtime::spawn(follow_cursor(app.handle().clone()));
 
-            let dir = app.path().app_data_dir()?.join("characters");
+            let dir = match control::home() {
+                Some(home) => home,
+                None => app.path().app_data_dir()?,
+            }
+            .join("characters");
             characters::sweep(&dir);
             let spirit_menu = Submenu::with_id(app, "spirit", "Spirit", true)?;
-            app.manage(Characters { dir, menu: spirit_menu.clone(), shown: Mutex::new(None), unavailable: Mutex::default(), busy: AtomicBool::new(false), checking: Mutex::new(None) });
+            app.manage(Characters { dir, menu: spirit_menu.clone(), shown: watch::channel(None).0, order: AtomicU64::new(0), choosing: Mutex::default(), unavailable: Mutex::default(), busy: AtomicBool::new(false), checking: Mutex::new(None) });
             refresh_menu(app.handle());
+            match control::file(&app.config().identifier).ok_or_else(|| std::io::Error::other("no data folder")).and_then(|file| control::listen(&file)) {
+                Ok((listener, token)) => {
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(control::serve(listener, token, move |request| answer(handle.clone(), request)));
+                }
+                Err(err) => eprintln!("control: {err}"),
+            }
 
             let menu = Menu::new(app)?;
             menu.append(&spirit_menu)?;
@@ -311,15 +409,15 @@ fn main() {
                     } else if let Some(character) = id.strip_prefix("remove-").filter(|id| characters::is_id(id)) {
                         tauri::async_runtime::spawn(remove_character(app.clone(), character.to_string()));
                     } else if let Some(n) = id.strip_prefix("spirit-").and_then(|n| n.parse::<usize>().ok()) {
-                        let _ = app.emit("spirit", json!(n));
+                        select(app, &n.to_string(), issue(app), None);
                     } else if let Some(character) = id.strip_prefix("character-").filter(|id| characters::is_id(id)) {
-                        let _ = app.emit("spirit", json!(character));
+                        select(app, character, issue(app), None);
                     }
                 })
                 .build(app)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("the companion could not start");
 }
 
@@ -365,6 +463,19 @@ mod tests {
         }
         assert!(matches!(find(&entries, &format!("character-{}", good.id)), Entry::Check { enabled: true, checked: true, .. }));
         assert!(matches!(find(&entries, "remove"), Entry::Submenu { enabled: true, .. }));
+    }
+
+    #[test]
+    fn a_spirit_or_character_is_found_by_name_title_or_id() {
+        let (good, twin, lost) = (character(1, true), characters::Character { title: "piece 1".into(), ..character(2, true) }, character(3, true));
+        let unavailable = HashSet::from([lost.id.clone()]);
+        assert_eq!(spirit_named(" moss DEER ", &[], &unavailable), Ok(("1".into(), "Moss deer".into())));
+        assert_eq!(spirit_named("Piece 1", &[good.clone()], &unavailable), Ok((good.id.clone(), "Piece 1".into())));
+        assert_eq!(spirit_named(&twin.id, &[good.clone(), twin.clone()], &unavailable), Ok((twin.id.clone(), "piece 1".into())));
+        assert_eq!(spirit_named("Piece 1", &[good.clone(), twin.clone()], &unavailable), Err(format!("More than one character is called “Piece 1”. Use an id instead: {}, {}.", good.id, twin.id)));
+        assert_eq!(spirit_named("Piece 3", &[lost.clone()], &unavailable), Err("“Piece 3” can’t be shown.".into()));
+        assert_eq!(spirit_named("Piece 2", &[character(2, false)], &unavailable), Err("“Piece 2” can’t be shown.".into()));
+        assert!(spirit_named("Nobody", &[good], &unavailable).unwrap_err().starts_with("There is no spirit or character called “Nobody”. The spirits are Fox, "));
     }
 
     #[test]

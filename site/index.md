@@ -32,16 +32,40 @@ set -e
 app='/Applications/Grove Companion.app'
 tmp=$(mktemp -d)
 curl -fsSL -o "$tmp/companion.dmg" https://github.com/oddessentials/agent-guild-companions/releases/latest/download/Grove-Companion-macos.dmg
-hdiutil attach -nobrowse -readonly -mountpoint "$tmp/disk" "$tmp/companion.dmg" >/dev/null
+if diskutil image attach --help >/dev/null 2>&1; then
+  mkdir -p "$tmp/disk"
+  diskutil image attach --nobrowse --readOnly --mountPoint "$tmp/disk" "$tmp/companion.dmg" >/dev/null
+  detach='diskutil eject'
+else
+  hdiutil attach -nobrowse -readonly -mountpoint "$tmp/disk" "$tmp/companion.dmg" >/dev/null
+  detach='hdiutil detach'
+fi
 pkill -f "$app/Contents/MacOS/" || true
 for i in $(seq 30); do pgrep -f "$app/Contents/MacOS/" >/dev/null || break; sleep 1; done
 rm -rf "$app"
 ditto "$tmp/disk/Grove Companion.app" "$app"
-hdiutil detach "$tmp/disk" >/dev/null
+$detach "$tmp/disk" >/dev/null
 rm -rf "$tmp"
+agent="$HOME/Library/LaunchAgents/com.oddessentials.agentguild.companion.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$agent" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.oddessentials.agentguild.companion</string>
+  <key>AssociatedBundleIdentifiers</key><string>com.oddessentials.agentguild.companion</string>
+  <key>ProgramArguments</key><array/>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PLIST
+plutil -insert ProgramArguments.0 -string "$app/Contents/MacOS/agent-guild-companions" "$agent"
 open "$app"
 echo Installed.
 ```
+
+It installs to `/Applications`, starts the companion, and starts it at every login. Dragging the app out of the disk image by hand installs it without starting it at login.
 
 If the person named a folder, or the companion is already somewhere else (`mdfind "kMDItemCFBundleIdentifier == 'com.oddessentials.agentguild.companion'"`), change the `app=` line in every macOS block to that path.
 
@@ -68,6 +92,58 @@ Once it is running, the spirit is on the desktop and reacts while Agent Guild ru
 
 Run the Install block again. It closes the companion, replaces it, and starts it again. The spirit's place, the chosen spirit and added characters are kept.
 
+## Add a character
+
+A character is a piece folder holding `piece.json` and `character.glb`. This checks it as **Add character…** in the tray or menu bar menu does, adds it and shows it. Set the `folder` line to the piece folder.
+
+The companion must be running, and recent enough to take commands: each block says when to run Install first. It prints one line saying what happened, and fails when it didn't work.
+
+Windows:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$folder = 'C:\path\to\piece'
+if (-not (Test-Path -LiteralPath (Join-Path $env:APPDATA 'com.oddessentials.agentguild.companion\control.json'))) { throw 'Grove Companion needs updating or starting first: run the Install block, then try again.' }
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+$dir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Grove Companion').InstallLocation.Trim('"')
+& (Join-Path $dir 'agent-guild-companions.exe') add $folder | Write-Output
+if ($LASTEXITCODE -ne 0) { throw 'The character was not added and shown.' }
+```
+
+macOS:
+
+```sh
+app='/Applications/Grove Companion.app'
+folder='/path/to/piece'
+if [ ! -f "$HOME/Library/Application Support/com.oddessentials.agentguild.companion/control.json" ]; then echo 'Grove Companion needs updating or starting first: run the Install block, then try again.'; exit 1; fi
+"$app/Contents/MacOS/agent-guild-companions" add "$folder"
+```
+
+## Choose the spirit
+
+Set the `spirit` line to Fox, Moss deer, Water spirit, Bird, Lantern or Hermit crab, or to an added character's title or id. The choice is kept, as it is from the menu. The same conditions apply as for adding a character.
+
+Windows:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$spirit = 'Fox'
+if (-not (Test-Path -LiteralPath (Join-Path $env:APPDATA 'com.oddessentials.agentguild.companion\control.json'))) { throw 'Grove Companion needs updating or starting first: run the Install block, then try again.' }
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+$dir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Grove Companion').InstallLocation.Trim('"')
+& (Join-Path $dir 'agent-guild-companions.exe') show $spirit | Write-Output
+if ($LASTEXITCODE -ne 0) { throw 'The spirit was not changed.' }
+```
+
+macOS:
+
+```sh
+app='/Applications/Grove Companion.app'
+spirit='Fox'
+if [ ! -f "$HOME/Library/Application Support/com.oddessentials.agentguild.companion/control.json" ]; then echo 'Grove Companion needs updating or starting first: run the Install block, then try again.'; exit 1; fi
+"$app/Contents/MacOS/agent-guild-companions" show "$spirit"
+```
+
 ## Uninstall
 
 Windows:
@@ -90,6 +166,7 @@ app='/Applications/Grove Companion.app'
 pkill -f "$app/Contents/MacOS/" || true
 for i in $(seq 30); do pgrep -f "$app/Contents/MacOS/" >/dev/null || break; sleep 1; done
 rm -rf "$app"
+rm -f "$HOME/Library/LaunchAgents/com.oddessentials.agentguild.companion.plist"
 echo Uninstalled.
 ```
 

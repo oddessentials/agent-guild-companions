@@ -230,6 +230,33 @@ function unavailable(n, error) {
   if (added(n)) invoke('character_unavailable', { id: n, problem: String(error?.message ?? error) });
 }
 
+const REPLACED = 'Another choice was made first.';
+let chosen = 0; // the order of the newest choice heard of, so one that arrives late changes nothing
+let replace = null; // answers the choice under way, without waiting for its load, when a newer one arrives
+
+async function select({ spirit, order, request }) {
+  let answered = !request;
+  const answer = async (problem) => {
+    if (answered) return;
+    answered = true;
+    await invoke('spirit_chosen', { request, problem });
+  };
+  if (order <= chosen) return answer(REPLACED);
+  chosen = order;
+  replace?.();
+  replace = () => answer(REPLACED);
+  let problem = REPLACED;
+  try {
+    await chooseSpirit(spirit);
+    if (chosen === order && character.n === spirit) problem = null;
+  } catch (error) {
+    unavailable(spirit, error);
+    shown();
+    problem = String(error?.message ?? error);
+  }
+  await answer(problem);
+}
+
 async function checkCharacter(token) {
   let problem = null;
   try { release((await loadCharacter(GLTFLoader, characterUrl(`check-${token}`))).scene, [character?.model]); } catch (error) { problem = error.message; }
@@ -638,12 +665,7 @@ try {
     react();
     if (payload.type === 'hello' || link.gone) heard();
   });
-  await listen('spirit', ({ payload }) => {
-    chooseSpirit(payload).catch((error) => {
-      unavailable(payload, error);
-      shown();
-    });
-  });
+  await listen('spirit', ({ payload }) => select(payload));
   await listen('check-character', ({ payload }) => checkCharacter(payload));
   await listen('removed', ({ payload }) => {
     if (loading === payload) {
