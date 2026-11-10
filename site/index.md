@@ -45,9 +45,26 @@ rm -rf "$app"
 ditto "$tmp/disk/Grove Companion.app" "$app"
 $detach "$tmp/disk" >/dev/null
 rm -rf "$tmp"
+agent="$HOME/Library/LaunchAgents/com.oddessentials.agentguild.companion.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$agent" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.oddessentials.agentguild.companion</string>
+  <key>AssociatedBundleIdentifiers</key><string>com.oddessentials.agentguild.companion</string>
+  <key>ProgramArguments</key><array/>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PLIST
+plutil -insert ProgramArguments.0 -string "$app/Contents/MacOS/agent-guild-companions" "$agent"
 open "$app"
 echo Installed.
 ```
+
+It installs to `/Applications`, starts the companion, and starts it at every login. Dragging the app out of the disk image by hand installs it without starting it at login.
 
 If the person named a folder, or the companion is already somewhere else (`mdfind "kMDItemCFBundleIdentifier == 'com.oddessentials.agentguild.companion'"`), change the `app=` line in every macOS block to that path.
 
@@ -96,6 +113,7 @@ app='/Applications/Grove Companion.app'
 pkill -f "$app/Contents/MacOS/" || true
 for i in $(seq 30); do pgrep -f "$app/Contents/MacOS/" >/dev/null || break; sleep 1; done
 rm -rf "$app"
+rm -f "$HOME/Library/LaunchAgents/com.oddessentials.agentguild.companion.plist"
 echo Uninstalled.
 ```
 

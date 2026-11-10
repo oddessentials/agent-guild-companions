@@ -17,6 +17,7 @@ const data = windows
   ? [join(process.env.APPDATA, id), join(process.env.LOCALAPPDATA, id)]
   : [join(homedir(), 'Library/Application Support', id), join(homedir(), 'Library/WebKit', id)];
 const app = windows ? join(process.env.LOCALAPPDATA, 'Grove Companion', 'agent-guild-companions.exe') : '/Applications/Grove Companion.app';
+const agent = join(homedir(), 'Library/LaunchAgents', `${id}.plist`);
 const work = mkdtempSync(join(tmpdir(), 'companion-site-'));
 
 function block(heading) {
@@ -40,9 +41,9 @@ function run(heading) {
 }
 
 function startsAtSignIn() {
-  if (!windows) return false;
   try {
-    execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Grove Companion'], { stdio: 'ignore' });
+    if (windows) execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Grove Companion'], { stdio: 'ignore' });
+    else assert.equal(execFileSync('plutil', ['-extract', 'ProgramArguments.0', 'raw', '-o', '-', agent], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(), `${app}/Contents/MacOS/agent-guild-companions`);
     return true;
   } catch {
     return false;
@@ -53,7 +54,7 @@ try {
   assert.equal(run('Install'), 'Installed.');
   assert.equal(run('Check'), 'Grove Companion is running.');
   assert.ok(existsSync(app), `${app} is installed`);
-  assert.equal(startsAtSignIn(), windows);
+  assert.equal(startsAtSignIn(), true);
 
   for (const dir of data) {
     mkdirSync(dir, { recursive: true });
@@ -62,6 +63,7 @@ try {
 
   assert.equal(run('Install'), 'Installed.');
   assert.equal(run('Check'), 'Grove Companion is running.');
+  assert.equal(startsAtSignIn(), true);
   for (const dir of data) assert.ok(existsSync(join(dir, 'site-check')), `updating kept ${dir}`);
 
   assert.equal(run('Uninstall'), 'Uninstalled.');
