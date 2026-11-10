@@ -32,12 +32,18 @@ set -e
 app='/Applications/Grove Companion.app'
 tmp=$(mktemp -d)
 curl -fsSL -o "$tmp/companion.dmg" https://github.com/oddessentials/agent-guild-companions/releases/latest/download/Grove-Companion-macos.dmg
-hdiutil attach -nobrowse -readonly -mountpoint "$tmp/disk" "$tmp/companion.dmg" >/dev/null
+if diskutil image attach --help >/dev/null 2>&1; then
+  diskutil image attach --nobrowse --readOnly --mountPoint "$tmp/disk" "$tmp/companion.dmg" >/dev/null
+  detach='diskutil eject'
+else
+  hdiutil attach -nobrowse -readonly -mountpoint "$tmp/disk" "$tmp/companion.dmg" >/dev/null
+  detach='hdiutil detach'
+fi
 pkill -f "$app/Contents/MacOS/" || true
 for i in $(seq 30); do pgrep -f "$app/Contents/MacOS/" >/dev/null || break; sleep 1; done
 rm -rf "$app"
 ditto "$tmp/disk/Grove Companion.app" "$app"
-hdiutil detach "$tmp/disk" >/dev/null
+$detach "$tmp/disk" >/dev/null
 rm -rf "$tmp"
 open "$app"
 echo Installed.

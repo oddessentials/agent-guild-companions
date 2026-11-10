@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,10 +29,12 @@ function block(heading) {
 function run(heading) {
   const file = join(work, windows ? 'block.ps1' : 'block.sh');
   writeFileSync(file, block(heading));
-  const out = windows
-    ? execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8' })
-    : execFileSync('sh', [file], { encoding: 'utf8' });
-  const last = out.trim().split(/\r?\n/).at(-1);
+  const done = windows
+    ? spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
+    : spawnSync('sh', [file], { encoding: 'utf8' });
+  assert.equal(done.status, 0, `"${heading}" failed: ${done.error ?? done.stderr ?? ''}\n${done.stdout}`);
+  if (!windows) assert.equal(done.stderr, '', `"${heading}" printed warnings`);
+  const last = done.stdout.trim().split(/\r?\n/).at(-1);
   console.log(`${heading}: ${last}`);
   return last;
 }
