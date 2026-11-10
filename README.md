@@ -7,3 +7,6 @@
     </picture>
   </a>
 </p>
+<p align="center">
+  <a href="https://oddessentials.github.io/agent-guild-companions/">For agents</a>
+</p>

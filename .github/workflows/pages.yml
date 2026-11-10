@@ -1,0 +1,81 @@
+name: Pages
+
+on:
+  pull_request:
+    paths:
+      - site/**
+      - tools/make_site.py
+      - tests/site_check.mjs
+      - .github/workflows/pages.yml
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - tools/make_site.py
+      - tests/site_check.mjs
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Follow the page on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025-vs2026, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Install, check, update and uninstall by following the page
+        run: node tests/site_check.mjs
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the page
+        run: python3 tools/make_site.py build/site
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: build/site
+          include-hidden-files: true
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - name: Check the published page
+        env:
+          PAGE: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          for file in index.md llms.txt; do
+            for attempt in 1 2 3 4 5 6; do
+              curl -fsS "${PAGE}${file}" -o "published-$file" && cmp -s "published-$file" "build/site/$file" && continue 2
+              sleep 10
+            done
+            echo "::error::${PAGE}${file} doesn't match the built page."
+            exit 1
+          done
