@@ -33,6 +33,7 @@ app='/Applications/Grove Companion.app'
 tmp=$(mktemp -d)
 curl -fsSL -o "$tmp/companion.dmg" https://github.com/oddessentials/agent-guild-companions/releases/latest/download/Grove-Companion-macos.dmg
 if diskutil image attach --help >/dev/null 2>&1; then
+  mkdir -p "$tmp/disk"
   diskutil image attach --nobrowse --readOnly --mountPoint "$tmp/disk" "$tmp/companion.dmg" >/dev/null
   detach='diskutil eject'
 else
