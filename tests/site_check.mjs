@@ -50,6 +50,19 @@ function startsAtSignIn() {
   }
 }
 
+// The choice the app's "Start at sign-in" setting makes, made here the way the app makes it.
+const choices = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run';
+function turnOff() {
+  if (windows) execFileSync('reg', ['add', choices, '/v', 'Grove Companion', '/t', 'REG_BINARY', '/d', '030000000000000000000000', '/f'], { stdio: 'ignore' });
+  else execFileSync('launchctl', ['disable', `gui/${process.getuid()}/${id}`]);
+}
+
+function turnedOff() {
+  if (!windows) return new RegExp(`"${id}" => (disabled|true)`).test(execFileSync('launchctl', ['print-disabled', `gui/${process.getuid()}`], { encoding: 'utf8' }));
+  const found = spawnSync('reg', ['query', choices, '/v', 'Grove Companion'], { encoding: 'utf8' });
+  return found.status === 0 && /REG_BINARY\s+03/.test(found.stdout);
+}
+
 try {
   assert.equal(run('Install'), 'Installed.');
   assert.equal(run('Check'), 'Grove Companion is running.');
@@ -60,20 +73,25 @@ try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'site-check'), '');
   }
+  assert.equal(turnedOff(), false);
+  turnOff();
 
   assert.equal(run('Install'), 'Installed.');
   assert.equal(run('Check'), 'Grove Companion is running.');
   assert.equal(startsAtSignIn(), true);
+  assert.equal(turnedOff(), true, 'updating kept the choice not to start at sign-in');
   for (const dir of data) assert.ok(existsSync(join(dir, 'site-check')), `updating kept ${dir}`);
 
   assert.equal(run('Uninstall'), 'Uninstalled.');
   assert.equal(run('Check'), 'Grove Companion is not running.');
   assert.ok(!existsSync(app), `${app} is removed`);
   assert.equal(startsAtSignIn(), false);
+  assert.equal(turnedOff(), true, 'uninstalling kept the choice');
   for (const dir of data) assert.ok(existsSync(join(dir, 'site-check')), `uninstalling kept ${dir}`);
 
   assert.equal(run('Remove its saved data'), 'Removed.');
   for (const dir of data) assert.ok(!existsSync(dir), `${dir} is removed`);
+  assert.equal(turnedOff(), false, 'removing saved data cleared the choice');
   console.log('ok   the page installs, checks, updates and uninstalls Grove Companion');
 } finally {
   rmSync(work, { recursive: true, force: true });

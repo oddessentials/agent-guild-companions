@@ -18,6 +18,12 @@ tokio = { version = "1", features = ["time", "sync", "net", "io-util"] }
 uuid = { version = "1", features = ["v4"] }
 tokio-tungstenite = "0.29"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [profile.release]
 lto = true
 codegen-units = 1

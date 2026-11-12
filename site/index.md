@@ -23,7 +23,7 @@ Start-Process -FilePath (Join-Path $dir 'agent-guild-companions.exe')
 'Installed.'
 ```
 
-It installs for this Windows user, starts the companion, and starts it at every sign-in.
+It installs for this Windows user, starts the companion, and starts it at every sign-in. The person can turn that off with **Start at sign-in** in the tray menu, and installing again keeps their choice.
 
 macOS:
 
@@ -65,7 +65,7 @@ open "$app"
 echo Installed.
 ```
 
-It installs to `/Applications`, starts the companion, and starts it at every login. Dragging the app out of the disk image by hand installs it without starting it at login.
+It installs to `/Applications`, starts the companion, and starts it at every login. The person can turn that off with **Start at login** in the menu bar menu, and installing again keeps their choice. Dragging the app out of the disk image by hand installs it without starting it at login.
 
 If the person named a folder, or the companion is already somewhere else (`mdfind "kMDItemCFBundleIdentifier == 'com.oddessentials.agentguild.companion'"`), change the `app=` line in every macOS block to that path.
 
@@ -180,6 +180,7 @@ Windows:
 
 ```powershell
 Remove-Item -LiteralPath (Join-Path $env:APPDATA 'com.oddessentials.agentguild.companion'), (Join-Path $env:LOCALAPPDATA 'com.oddessentials.agentguild.companion') -Recurse -Force -ErrorAction SilentlyContinue
+Remove-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' -Name 'Grove Companion' -ErrorAction SilentlyContinue
 'Removed.'
 ```
 
@@ -187,5 +188,6 @@ macOS:
 
 ```sh
 rm -rf "$HOME/Library/Application Support/com.oddessentials.agentguild.companion" "$HOME/Library/WebKit/com.oddessentials.agentguild.companion" "$HOME/Library/Caches/com.oddessentials.agentguild.companion"
+launchctl enable "gui/$(id -u)/com.oddessentials.agentguild.companion" 2>/dev/null || true
 echo Removed.
 ```

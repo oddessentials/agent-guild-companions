@@ -3,6 +3,7 @@
 mod characters;
 mod control;
 mod manager;
+mod startup;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -18,7 +19,7 @@ use tauri::{
     http::{header, Method, Response, StatusCode},
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    tray::TrayIconBuilder,
+    tray::{TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -129,6 +130,26 @@ fn refresh_menu(app: &AppHandle) {
 
 fn tell(app: &AppHandle, title: &str, message: String) {
     app.dialog().message(message).title(title).kind(MessageDialogKind::Error).show(|_| {});
+}
+
+/// What the Start at sign-in tick last showed, so a click applies the opposite of what the person saw.
+static STARTUP_SHOWN: Mutex<Option<bool>> = Mutex::new(None);
+
+/// The tick follows what the system holds, whether or not the change went through.
+fn toggle_startup(app: &AppHandle) {
+    let on = startup::chosen(&mut STARTUP_SHOWN.lock().unwrap());
+    if let Some(on) = on {
+        if let Err(err) = startup::set(&startup::entry(&app.config().identifier), on) {
+            tell(app, "This setting can’t be changed", format!("Grove Companion could not change whether it starts when you sign in: {err}"));
+        }
+    }
+    show_startup(app);
+}
+
+fn show_startup(app: &AppHandle) {
+    let (item, now) = (app.state::<CheckMenuItem<Wry>>(), startup::state(&startup::entry(&app.config().identifier)));
+    *STARTUP_SHOWN.lock().unwrap() = now;
+    let _ = item.set_checked(now == Some(true)).and_then(|_| item.set_enabled(now.is_some()));
 }
 
 async fn exclusive<T>(app: &AppHandle, work: impl std::future::Future<Output = T>) -> Option<T> {
@@ -395,15 +416,27 @@ fn main() {
 
             let menu = Menu::new(app)?;
             menu.append(&spirit_menu)?;
+            let starts = startup::state(&startup::entry(&app.config().identifier));
+            *STARTUP_SHOWN.lock().unwrap() = starts;
+            let startup_item = CheckMenuItem::with_id(app, "startup", startup::LABEL, starts.is_some(), starts == Some(true), None::<&str>)?;
+            menu.append(&startup_item)?;
+            app.manage(startup_item);
             menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
             TrayIconBuilder::new()
                 .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
                 .tooltip("Grove Companion")
                 .menu(&menu)
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(event, TrayIconEvent::Enter { .. } | TrayIconEvent::Click { .. }) {
+                        show_startup(tray.app_handle());
+                    }
+                })
                 .on_menu_event(|app, event| {
                     let id = event.id().as_ref();
                     if id == "quit" {
                         app.exit(0);
+                    } else if id == "startup" {
+                        toggle_startup(app);
                     } else if id == "add-character" {
                         tauri::async_runtime::spawn(add_character(app.clone()));
                     } else if let Some(character) = id.strip_prefix("remove-").filter(|id| characters::is_id(id)) {
