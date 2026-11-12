@@ -30,7 +30,7 @@ if ($starts -ne "`"$app`"") { throw "The installer should start `"$app`" at sign
 
 # Someone who turned that off keeps their choice when they install again to update.
 if ($null -ne (Get-Choice)) { throw 'A choice about starting at sign-in was there before anyone made one.' }
-if (-not (Test-Path -Path $choices)) { New-Item -Path $choices | Out-Null }
+if (-not (Test-Path -Path $choices)) { New-Item -Path $choices -Force | Out-Null }
 Set-ItemProperty -Path $choices -Name $entry -Type Binary -Value ([byte[]](3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 $again = Start-Process -FilePath $Installer -ArgumentList '/S' -Wait -PassThru
 if ($again.ExitCode -ne 0) { throw "Installing again exited with code $($again.ExitCode)." }
