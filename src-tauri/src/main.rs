@@ -19,7 +19,7 @@ use tauri::{
     http::{header, Method, Response, StatusCode},
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    tray::TrayIconBuilder,
+    tray::{TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -140,7 +140,11 @@ fn toggle_startup(app: &AppHandle) {
             tell(app, "This setting can’t be changed", format!("Grove Companion could not change whether it starts when you sign in: {err}"));
         }
     }
-    let now = startup::state(&entry);
+    show_startup(app);
+}
+
+fn show_startup(app: &AppHandle) {
+    let (item, now) = (app.state::<CheckMenuItem<Wry>>(), startup::state(&startup::entry(&app.config().identifier)));
     let _ = item.set_checked(now == Some(true)).and_then(|_| item.set_enabled(now.is_some()));
 }
 
@@ -417,6 +421,11 @@ fn main() {
                 .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
                 .tooltip("Grove Companion")
                 .menu(&menu)
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(event, TrayIconEvent::Enter { .. } | TrayIconEvent::Click { .. }) {
+                        show_startup(tray.app_handle());
+                    }
+                })
                 .on_menu_event(|app, event| {
                     let id = event.id().as_ref();
                     if id == "quit" {
