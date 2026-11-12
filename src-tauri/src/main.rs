@@ -135,8 +135,8 @@ fn tell(app: &AppHandle, title: &str, message: String) {
 /// The tick follows what the system holds, whether or not the change went through.
 fn toggle_startup(app: &AppHandle) {
     let (item, entry) = (app.state::<CheckMenuItem<Wry>>(), startup::entry(&app.config().identifier));
-    if let Some(on) = startup::state(&entry) {
-        if let Err(err) = startup::set(&entry, !on) {
+    if let Ok(on) = item.is_checked() {
+        if let Err(err) = startup::set(&entry, on) {
             tell(app, "This setting can’t be changed", format!("Grove Companion could not change whether it starts when you sign in: {err}"));
         }
     }
