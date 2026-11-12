@@ -181,6 +181,7 @@ Windows:
 
 ```powershell
 Remove-Item -LiteralPath (Join-Path $env:APPDATA 'com.oddessentials.agentguild.companion'), (Join-Path $env:LOCALAPPDATA 'com.oddessentials.agentguild.companion') -Recurse -Force -ErrorAction SilentlyContinue
+Remove-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' -Name 'Grove Companion' -ErrorAction SilentlyContinue
 'Removed.'
 ```
 

@@ -86,13 +86,12 @@ try {
   assert.equal(run('Check'), 'Grove Companion is not running.');
   assert.ok(!existsSync(app), `${app} is removed`);
   assert.equal(startsAtSignIn(), false);
-  // A release from before the setting has an uninstaller that leaves the Windows choice; clear it and check the rest.
-  if (windows) spawnSync('reg', ['delete', choices, '/v', 'Grove Companion', '/f'], { stdio: 'ignore' });
-  assert.equal(turnedOff(), false, 'uninstalling cleared the choice');
+  assert.equal(turnedOff(), windows, windows ? 'uninstalling kept the choice' : 'uninstalling cleared the choice');
   for (const dir of data) assert.ok(existsSync(join(dir, 'site-check')), `uninstalling kept ${dir}`);
 
   assert.equal(run('Remove its saved data'), 'Removed.');
   for (const dir of data) assert.ok(!existsSync(dir), `${dir} is removed`);
+  assert.equal(turnedOff(), false, 'removing saved data cleared the choice');
   console.log('ok   the page installs, checks, updates and uninstalls Grove Companion');
 } finally {
   rmSync(work, { recursive: true, force: true });
