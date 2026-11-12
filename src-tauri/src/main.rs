@@ -3,6 +3,7 @@
 mod characters;
 mod control;
 mod manager;
+mod startup;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -129,6 +130,18 @@ fn refresh_menu(app: &AppHandle) {
 
 fn tell(app: &AppHandle, title: &str, message: String) {
     app.dialog().message(message).title(title).kind(MessageDialogKind::Error).show(|_| {});
+}
+
+/// The tick follows what the system holds, whether or not the change went through.
+fn toggle_startup(app: &AppHandle) {
+    let (item, entry) = (app.state::<CheckMenuItem<Wry>>(), startup::entry(&app.config().identifier));
+    if let Some(on) = startup::state(&entry) {
+        if let Err(err) = startup::set(&entry, !on) {
+            tell(app, "This setting can’t be changed", format!("Grove Companion could not change whether it starts when you sign in: {err}"));
+        }
+    }
+    let now = startup::state(&entry);
+    let _ = item.set_checked(now == Some(true)).and_then(|_| item.set_enabled(now.is_some()));
 }
 
 async fn exclusive<T>(app: &AppHandle, work: impl std::future::Future<Output = T>) -> Option<T> {
@@ -395,6 +408,10 @@ fn main() {
 
             let menu = Menu::new(app)?;
             menu.append(&spirit_menu)?;
+            let starts = startup::state(&startup::entry(&app.config().identifier));
+            let startup_item = CheckMenuItem::with_id(app, "startup", startup::LABEL, starts.is_some(), starts == Some(true), None::<&str>)?;
+            menu.append(&startup_item)?;
+            app.manage(startup_item);
             menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
             TrayIconBuilder::new()
                 .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
@@ -404,6 +421,8 @@ fn main() {
                     let id = event.id().as_ref();
                     if id == "quit" {
                         app.exit(0);
+                    } else if id == "startup" {
+                        toggle_startup(app);
                     } else if id == "add-character" {
                         tauri::async_runtime::spawn(add_character(app.clone()));
                     } else if let Some(character) = id.strip_prefix("remove-").filter(|id| characters::is_id(id)) {
