@@ -24,6 +24,8 @@ jobs:
           node-version-file: .node-version
       - run: npm ci --ignore-scripts
       - run: npm test
+      - run: cargo test --locked
+        working-directory: src-tauri
       - name: Build the unsigned installer
         run: npx tauri build --bundles nsis -- --locked
       - name: Install, start and uninstall
@@ -58,6 +60,8 @@ jobs:
           node-version-file: .node-version
       - run: npm ci --ignore-scripts
       - run: npm test
+      - run: cargo test --locked
+        working-directory: src-tauri
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Build the unsigned disk image
         run: npx tauri build --target universal-apple-darwin --bundles app,dmg -- --locked

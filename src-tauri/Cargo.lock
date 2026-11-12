@@ -13,6 +13,7 @@ name = "agent-guild-companions"
 version = "0.0.1"
 dependencies = [
  "futures-util",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

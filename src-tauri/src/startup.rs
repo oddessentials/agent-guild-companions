@@ -13,7 +13,6 @@ pub fn entry(identifier: &str) -> String {
     if cfg!(windows) { "Grove Companion".into() } else { identifier.into() }
 }
 
-/// `None` when nothing starts this entry at sign-in, as for a build that was never installed.
 pub fn state(entry: &str) -> Option<bool> {
     system::state(entry)
 }
@@ -58,22 +57,23 @@ mod system {
 mod system {
     use std::{
         io::{Error, Result},
-        os::unix::fs::MetadataExt,
         path::PathBuf,
         process::Command,
     };
 
-    fn agent(entry: &str) -> Option<PathBuf> {
-        Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/LaunchAgents").join(format!("{entry}.plist")))
+    fn installed(entry: &str) -> bool {
+        std::env::var_os("HOME").is_some_and(|home| PathBuf::from(home).join("Library/LaunchAgents").join(format!("{entry}.plist")).exists())
     }
 
-    /// The person's launchd domain, from who owns their login agent.
-    fn domain(entry: &str) -> Option<String> {
-        Some(format!("gui/{}", std::fs::metadata(agent(entry)?).ok()?.uid()))
+    fn domain() -> String {
+        format!("gui/{}", unsafe { libc::getuid() })
     }
 
     pub fn state(entry: &str) -> Option<bool> {
-        let listed = Command::new("launchctl").arg("print-disabled").arg(domain(entry)?).output().ok()?;
+        if !installed(entry) {
+            return None;
+        }
+        let listed = Command::new("launchctl").arg("print-disabled").arg(domain()).output().ok().filter(|out| out.status.success())?;
         Some(!off(&String::from_utf8_lossy(&listed.stdout), entry))
     }
 
@@ -85,8 +85,10 @@ mod system {
     }
 
     pub fn set(entry: &str, on: bool) -> Result<()> {
-        let domain = domain(entry).ok_or_else(|| Error::other("the login agent is not installed"))?;
-        let done = Command::new("launchctl").arg(if on { "enable" } else { "disable" }).arg(format!("{domain}/{entry}")).output()?;
+        if !installed(entry) {
+            return Err(Error::other("the login agent is not installed"));
+        }
+        let done = Command::new("launchctl").arg(if on { "enable" } else { "disable" }).arg(format!("{}/{entry}", domain())).output()?;
         if done.status.success() { Ok(()) } else { Err(Error::other(String::from_utf8_lossy(&done.stderr).trim().to_string())) }
     }
 }
@@ -156,5 +158,15 @@ mod tests {
         assert!(!off(&listed("false"), label));
         assert!(!off("disabled services = {\n}\n", label));
         assert!(!off(&listed("disabled"), "com.oddessentials.agentguild"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_login_agent_that_is_not_installed_is_neither_read_nor_changed() {
+        use super::*;
+
+        let entry = format!("com.oddessentials.agentguild.companion.test{}", std::process::id());
+        assert_eq!(state(&entry), None);
+        assert!(set(&entry, false).is_err());
     }
 }
