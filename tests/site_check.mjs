@@ -86,7 +86,7 @@ try {
   assert.equal(run('Check'), 'Grove Companion is not running.');
   assert.ok(!existsSync(app), `${app} is removed`);
   assert.equal(startsAtSignIn(), false);
-  assert.equal(turnedOff(), windows, windows ? 'uninstalling kept the choice' : 'uninstalling cleared the choice');
+  assert.equal(turnedOff(), true, 'uninstalling kept the choice');
   for (const dir of data) assert.ok(existsSync(join(dir, 'site-check')), `uninstalling kept ${dir}`);
 
   assert.equal(run('Remove its saved data'), 'Removed.');

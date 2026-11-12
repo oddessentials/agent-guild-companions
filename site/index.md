@@ -167,7 +167,6 @@ pkill -f "$app/Contents/MacOS/" || true
 for i in $(seq 30); do pgrep -f "$app/Contents/MacOS/" >/dev/null || break; sleep 1; done
 rm -rf "$app"
 rm -f "$HOME/Library/LaunchAgents/com.oddessentials.agentguild.companion.plist"
-launchctl enable "gui/$(id -u)/com.oddessentials.agentguild.companion" 2>/dev/null || true
 echo Uninstalled.
 ```
 
@@ -189,5 +188,6 @@ macOS:
 
 ```sh
 rm -rf "$HOME/Library/Application Support/com.oddessentials.agentguild.companion" "$HOME/Library/WebKit/com.oddessentials.agentguild.companion" "$HOME/Library/Caches/com.oddessentials.agentguild.companion"
+launchctl enable "gui/$(id -u)/com.oddessentials.agentguild.companion" 2>/dev/null || true
 echo Removed.
 ```

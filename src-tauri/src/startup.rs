@@ -21,6 +21,14 @@ pub fn set(entry: &str, on: bool) -> std::io::Result<()> {
     system::set(entry, on)
 }
 
+/// A click asks for the opposite of what the tick showed, whatever the menu did to the tick first,
+/// and shows that, so a second click before the system is read again asks for the opposite once more.
+pub fn chosen(shown: &mut Option<bool>) -> Option<bool> {
+    let on = !(*shown)?;
+    *shown = Some(on);
+    Some(on)
+}
+
 #[cfg(windows)]
 mod system {
     use std::io::{ErrorKind, Result};
@@ -106,6 +114,20 @@ mod system {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn each_click_asks_for_the_opposite_of_what_was_shown_once() {
+        use super::chosen;
+
+        let mut shown = Some(true);
+        assert_eq!(chosen(&mut shown), Some(false));
+        assert_eq!(chosen(&mut shown), Some(true), "a second click before the system is read again turns it back");
+        let mut shown = Some(false);
+        assert_eq!(chosen(&mut shown), Some(true));
+        let mut shown = None;
+        assert_eq!(chosen(&mut shown), None, "nothing to change when the setting cannot be read");
+        assert_eq!(shown, None);
+    }
+
     #[cfg(windows)]
     #[test]
     fn the_choice_is_kept_beside_the_installers_entry_and_read_back() {
