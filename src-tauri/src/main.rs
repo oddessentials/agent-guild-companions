@@ -132,49 +132,23 @@ fn tell(app: &AppHandle, title: &str, message: String) {
     app.dialog().message(message).title(title).kind(MessageDialogKind::Error).show(|_| {});
 }
 
-/// What the Start at sign-in tick last showed, whether a read of the system is under way, and how many clicks have
-/// changed it, so a click applies the opposite of what the person saw and a read begun before a click cannot undo it.
+/// What the Start at sign-in tick last showed, so a click applies the opposite of what the person saw.
 static STARTUP_SHOWN: Mutex<Option<bool>> = Mutex::new(None);
-static STARTUP_READING: AtomicBool = AtomicBool::new(false);
-static STARTUP_CLICKS: AtomicU64 = AtomicU64::new(0);
 
 /// The tick follows what the system holds, whether or not the change went through.
-/// launchctl and the registry are asked off the main thread, so the menu never waits on them.
 fn toggle_startup(app: &AppHandle) {
-    let Some(on) = startup::chosen(&mut STARTUP_SHOWN.lock().unwrap()) else { return show_startup(app) };
-    STARTUP_CLICKS.fetch_add(1, Ordering::SeqCst);
-    let app = app.clone();
-    std::thread::spawn(move || {
+    let on = startup::chosen(&mut STARTUP_SHOWN.lock().unwrap());
+    if let Some(on) = on {
         if let Err(err) = startup::set(&startup::entry(&app.config().identifier), on) {
-            tell(&app, "This setting can’t be changed", format!("Grove Companion could not change whether it starts when you sign in: {err}"));
+            tell(app, "This setting can’t be changed", format!("Grove Companion could not change whether it starts when you sign in: {err}"));
         }
-        read_startup(&app);
-    });
+    }
+    show_startup(app);
 }
 
 fn show_startup(app: &AppHandle) {
-    if STARTUP_READING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let app = app.clone();
-    std::thread::spawn(move || {
-        read_startup(&app);
-        STARTUP_READING.store(false, Ordering::SeqCst);
-    });
-}
-
-fn read_startup(app: &AppHandle) {
-    let clicks = STARTUP_CLICKS.load(Ordering::SeqCst);
-    let now = startup::state(&startup::entry(&app.config().identifier));
-    {
-        // Let go before setting the tick, which waits on the main thread, where a click takes this lock.
-        let mut shown = STARTUP_SHOWN.lock().unwrap();
-        if STARTUP_CLICKS.load(Ordering::SeqCst) != clicks {
-            return;
-        }
-        *shown = now;
-    }
-    let item = app.state::<CheckMenuItem<Wry>>();
+    let (item, now) = (app.state::<CheckMenuItem<Wry>>(), startup::state(&startup::entry(&app.config().identifier)));
+    *STARTUP_SHOWN.lock().unwrap() = now;
     let _ = item.set_checked(now == Some(true)).and_then(|_| item.set_enabled(now.is_some()));
 }
 
